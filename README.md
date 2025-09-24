@@ -89,12 +89,12 @@ strix --target api.your-app.com --instruction "Prioritize authentication and aut
 ### ⚙️ Configuration
 
 ```bash
-# Required
 export STRIX_LLM="openai/gpt-5"
 export LLM_API_KEY="your-api-key"
 
-# Recommended
-export PERPLEXITY_API_KEY="your-api-key"
+# Optional
+export LLM_API_BASE="your-api-base-url"  # if using a local model, e.g. Ollama, LMStudio
+export PERPLEXITY_API_KEY="your-api-key"  # for search capabilities
 ```
 
 [📚 View supported AI models](https://docs.litellm.ai/docs/providers)

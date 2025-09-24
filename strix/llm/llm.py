@@ -28,6 +28,15 @@ api_key = os.getenv("LLM_API_KEY")
 if api_key:
     litellm.api_key = api_key
 
+api_base = (
+    os.getenv("LLM_API_BASE")
+    or os.getenv("OPENAI_API_BASE")
+    or os.getenv("LITELLM_BASE_URL")
+    or os.getenv("OLLAMA_API_BASE")
+)
+if api_base:
+    litellm.api_base = api_base
+
 
 class LLMRequestFailedError(Exception):
     def __init__(self, message: str, details: str | None = None):
