@@ -29,6 +29,15 @@ Strix are autonomous AI agents that act just like real hackers - they run your c
 
 ---
 
+### 🎯 Use Cases
+
+- Detect and validate critical vulnerabilities in your applications.
+- Get penetration tests done in hours, not weeks, with compliance reports.
+- Automate bug bounty research and generate PoCs for faster reporting.
+- Run tests in CI/CD to block vulnerabilities before reaching production.
+
+---
+
 ### 🚀 Quick Start
 
 Prerequisites:
@@ -97,6 +106,9 @@ strix --target https://your-app.com
 
 # Focused testing
 strix --target api.your-app.com --instruction "Prioritize authentication and authorization testing"
+
+# Testing with credentials
+strix --target https://your-app.com --instruction "Test with credentials: testuser/testpass. Focus on privilege escalation and access control bypasses."
 ```
 
 ### ⚙️ Configuration
