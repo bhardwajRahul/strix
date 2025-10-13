@@ -40,7 +40,7 @@ def format_token_count(count: float) -> str:
     return str(count)
 
 
-def validate_environment() -> None:
+def validate_environment() -> None:  # noqa: PLR0912, PLR0915
     console = Console()
     missing_required_vars = []
     missing_optional_vars = []
