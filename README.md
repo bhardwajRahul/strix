@@ -6,7 +6,7 @@
 
 [![Strix](https://img.shields.io/badge/Strix-usestrix.com-1a1a1a.svg)](https://usestrix.com)
 [![Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![Discord](https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/yduEyduBsp)
+[![Discord](https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/J48Fzuh7)
 [![PyPI Downloads](https://static.pepy.tech/personalized-badge/strix-agent?period=total&units=INTERNATIONAL_SYSTEM&left_color=GRAY&right_color=BLACK&left_text=Downloads)](https://pepy.tech/projects/strix-agent)
 [![GitHub stars](https://img.shields.io/github/stars/usestrix/strix.svg?style=social&label=Star)](https://github.com/usestrix/strix)
 </div>
@@ -168,6 +168,6 @@ Help expand our collection of specialized prompt modules for AI agents:
 
 ## 👥 Join Our Community
 
-Have questions? Found a bug? Want to contribute? **[Join our Discord!](https://discord.gg/yduEyduBsp)**
+Have questions? Found a bug? Want to contribute? **[Join our Discord!](https://discord.gg/J48Fzuh7)**
 
 </div>
