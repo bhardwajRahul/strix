@@ -21,8 +21,7 @@ from strix.interface.cli import run_cli
 from strix.interface.tui import run_tui
 from strix.interface.utils import (
     assign_workspace_subdirs,
-    build_llm_stats_text,
-    build_stats_text,
+    build_final_stats_text,
     check_docker_connection,
     clone_repository,
     collect_local_sources,
@@ -370,8 +369,7 @@ def display_completion_message(args: argparse.Namespace, results_path: Path) -> 
         completion_text.append(" • ", style="dim white")
         completion_text.append("Penetration test interrupted by user", style="white")
 
-    stats_text = build_stats_text(tracer)
-    llm_stats_text = build_llm_stats_text(tracer)
+    stats_text = build_final_stats_text(tracer)
 
     target_text = Text()
     if len(args.targets_info) == 1:
@@ -390,9 +388,6 @@ def display_completion_message(args: argparse.Namespace, results_path: Path) -> 
 
     if stats_text.plain:
         panel_parts.extend(["\n", stats_text])
-
-    if llm_stats_text.plain:
-        panel_parts.extend(["\n", llm_stats_text])
 
     if scan_completed or has_vulnerabilities:
         results_text = Text()
