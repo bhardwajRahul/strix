@@ -24,9 +24,13 @@ SANDBOX_MODE = os.getenv("STRIX_SANDBOX_MODE", "false").lower() == "true"
 
 HAS_PERPLEXITY_API = bool(os.getenv("PERPLEXITY_API_KEY"))
 
+DISABLE_BROWSER = os.getenv("STRIX_DISABLE_BROWSER", "false").lower() == "true"
+
 if not SANDBOX_MODE:
     from .agents_graph import *  # noqa: F403
-    from .browser import *  # noqa: F403
+
+    if not DISABLE_BROWSER:
+        from .browser import *  # noqa: F403
     from .file_edit import *  # noqa: F403
     from .finish import *  # noqa: F403
     from .notes import *  # noqa: F403
@@ -40,7 +44,8 @@ if not SANDBOX_MODE:
     if HAS_PERPLEXITY_API:
         from .web_search import *  # noqa: F403
 else:
-    from .browser import *  # noqa: F403
+    if not DISABLE_BROWSER:
+        from .browser import *  # noqa: F403
     from .file_edit import *  # noqa: F403
     from .proxy import *  # noqa: F403
     from .python import *  # noqa: F403
