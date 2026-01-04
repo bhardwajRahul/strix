@@ -318,7 +318,7 @@ echo ""
 echo -e "  ${CYAN}2.${NC} Run a penetration test:"
 echo -e "     ${MUTED}strix --target https://example.com${NC}"
 echo ""
-echo -e "${MUTED}For more information visit ${NC}https://usestrix.com"
+echo -e "${MUTED}For more information visit ${NC}https://strix.ai"
 echo -e "${MUTED}Join our community ${NC}https://discord.gg/YjKFvEZSdZ"
 echo ""
 

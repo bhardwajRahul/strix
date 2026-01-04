@@ -17,7 +17,7 @@
 
 [![GitHub Stars](https://img.shields.io/github/stars/usestrix/strix)](https://github.com/usestrix/strix)
 [![Discord](https://img.shields.io/badge/Discord-%235865F2.svg?&logo=discord&logoColor=white)](https://discord.gg/YjKFvEZSdZ)
-[![Website](https://img.shields.io/badge/Website-usestrix.com-2d3748.svg)](https://usestrix.com)
+[![Website](https://img.shields.io/badge/Website-strix.ai-2d3748.svg)](https://strix.ai)
 
 <a href="https://trendshift.io/repositories/15362" target="_blank"><img src="https://trendshift.io/api/badge/repositories/15362" alt="usestrix%2Fstrix | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
 
@@ -89,7 +89,7 @@ strix --target ./app-directory
 
 ## ☁️ Run Strix in Cloud
 
-Want to skip the local setup, API keys, and unpredictable LLM costs? Run the hosted cloud version of Strix at **[app.usestrix.com](https://usestrix.com)**.
+Want to skip the local setup, API keys, and unpredictable LLM costs? Run the hosted cloud version of Strix at **[app.strix.ai](https://strix.ai)**.
 
 Launch a scan in just a few minutes—no setup or configuration required—and you’ll get:
 
@@ -98,7 +98,7 @@ Launch a scan in just a few minutes—no setup or configuration required—and y
 - **CI/CD and GitHub integrations** to block risky changes before production
 - **Continuous monitoring** so new vulnerabilities are caught quickly
 
-[**Run your first pentest now →**](https://usestrix.com)
+[**Run your first pentest now →**](https://strix.ai)
 
 ---
 
