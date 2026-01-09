@@ -320,9 +320,15 @@ class LLM:
             (litellm.APIError, "API error"),
             (litellm.OpenAIError, "OpenAI error"),
         ]
+
+        from strix.telemetry import posthog
+
         for error_type, message in error_map:
             if isinstance(e, error_type):
+                posthog.error(f"llm_{error_type.__name__}", message)
                 raise LLMRequestFailedError(f"LLM request failed: {message}", str(e)) from e
+
+        posthog.error("llm_unknown_error", type(e).__name__)
         raise LLMRequestFailedError(f"LLM request failed: {type(e).__name__}", str(e)) from e
 
     async def generate(

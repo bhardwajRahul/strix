@@ -4,6 +4,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 from uuid import uuid4
 
+from strix.telemetry import posthog
+
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -136,6 +138,7 @@ class Tracer:
 
         self.vulnerability_reports.append(report)
         logger.info(f"Added vulnerability report: {report_id} - {title}")
+        posthog.finding(severity)
 
         if self.vulnerability_found_callback:
             self.vulnerability_found_callback(report)
@@ -181,6 +184,7 @@ class Tracer:
 
         logger.info("Updated scan final fields")
         self.save_run_data(mark_complete=True)
+        posthog.end(self, exit_reason="finished_by_tool")
 
     def log_agent_creation(
         self, agent_id: str, name: str, task: str, parent_id: str | None = None

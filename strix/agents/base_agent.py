@@ -316,16 +316,22 @@ class BaseAgent(metaclass=AgentMeta):
         if not sandbox_mode and self.state.sandbox_id is None:
             from strix.runtime import get_runtime
 
-            runtime = get_runtime()
-            sandbox_info = await runtime.create_sandbox(
-                self.state.agent_id, self.state.sandbox_token, self.local_sources
-            )
-            self.state.sandbox_id = sandbox_info["workspace_id"]
-            self.state.sandbox_token = sandbox_info["auth_token"]
-            self.state.sandbox_info = sandbox_info
+            try:
+                runtime = get_runtime()
+                sandbox_info = await runtime.create_sandbox(
+                    self.state.agent_id, self.state.sandbox_token, self.local_sources
+                )
+                self.state.sandbox_id = sandbox_info["workspace_id"]
+                self.state.sandbox_token = sandbox_info["auth_token"]
+                self.state.sandbox_info = sandbox_info
 
-            if "agent_id" in sandbox_info:
-                self.state.sandbox_info["agent_id"] = sandbox_info["agent_id"]
+                if "agent_id" in sandbox_info:
+                    self.state.sandbox_info["agent_id"] = sandbox_info["agent_id"]
+            except Exception as e:
+                from strix.telemetry import posthog
+
+                posthog.error("sandbox_init_error", str(e))
+                raise
 
         if not self.state.task:
             self.state.task = task
