@@ -2,7 +2,7 @@
 
 To help make Strix better for everyone, we collect anonymized data that helps us understand how to better improve our AI security agent for our users, guide the addition of new features, and fix common errors and bugs. This feedback loop is crucial for improving Strix's capabilities and user experience.
 
-We use [PostHog](https://posthog.com), an open-source analytics platform, for data collection and analysis. Our telemetry implementation is fully transparent - you can review the [source code](https://github.com/strix-ai/strix/blob/main/strix/telemetry/posthog.py) to see exactly what we track.
+We use [PostHog](https://posthog.com), an open-source analytics platform, for data collection and analysis. Our telemetry implementation is fully transparent - you can review the [source code](https://github.com/usestrix/strix/blob/main/strix/telemetry/posthog.py) to see exactly what we track.
 
 ### Telemetry Policy
 
@@ -18,7 +18,7 @@ We collect only very **basic** usage data including:
 **Model Usage:** Which LLM model is being used (not prompts or responses)\
 **Aggregate Metrics:** Vulnerability counts by severity, agent/tool counts, token usage and cost estimates
 
-For complete transparency, you can inspect our [telemetry implementation](https://github.com/strix-ai/strix/blob/main/strix/telemetry/posthog.py) to see the exact events we track.
+For complete transparency, you can inspect our [telemetry implementation](https://github.com/usestrix/strix/blob/main/strix/telemetry/posthog.py) to see the exact events we track.
 
 ### What We **Never** Collect
 
