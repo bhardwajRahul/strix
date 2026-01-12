@@ -213,7 +213,7 @@ VulnerabilityDetailScreen {
     color: #a3a3a3;
     text-align: left;
     content-align: left middle;
-    text-style: italic;
+    text-style: none;
     margin: 0;
     padding: 0;
 }

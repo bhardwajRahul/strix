@@ -2,7 +2,6 @@ import argparse
 import asyncio
 import atexit
 import logging
-import random
 import signal
 import sys
 import threading
@@ -18,7 +17,6 @@ if TYPE_CHECKING:
 from rich.align import Align
 from rich.console import Group
 from rich.panel import Panel
-from rich.spinner import SPINNERS
 from rich.style import Style
 from rich.text import Text
 from textual import events, on
@@ -697,25 +695,18 @@ class StrixTUIApp(App):  # type: ignore[misc]
         self._scan_stop_event = threading.Event()
         self._scan_completed = threading.Event()
 
-        self._action_verbs = [
-            "Generating",
-            "Scanning",
-            "Analyzing",
-            "Hacking",
-            "Testing",
-            "Exploiting",
-            "Pwning",
-            "Loading",
-            "Running",
-            "Working",
-            "Strixing",
-            "Thinking",
-            "Reasoning",
+        self._spinner_frame_index: int = 0  # Current animation frame index
+        self._sweep_num_squares: int = 6  # Number of squares in sweep animation
+        self._sweep_colors: list[str] = [
+            "#000000",  # Dimmest (shows dot)
+            "#031a09",
+            "#052e16",
+            "#0d4a2a",
+            "#15803d",
+            "#22c55e",
+            "#4ade80",
+            "#86efac",  # Brightest
         ]
-        self._agent_verbs: dict[str, str] = {}  # agent_id -> current_verb
-        self._agent_verb_timers: dict[str, Any] = {}  # agent_id -> timer
-        self._spinner_frame_index: int = 0  # Current spinner frame index
-        self._spinner_frames: list[str] = list(SPINNERS["dots"]["frames"])  # Braille spinner frames
         self._dot_animation_timer: Any | None = None
 
         self._setup_cleanup_handlers()
@@ -927,13 +918,6 @@ class StrixTUIApp(App):  # type: ignore[misc]
             vuln_indicator = f" ({vuln_count})" if vuln_count > 0 else ""
             agent_name = f"{status_icon} {agent_name_raw}{vuln_indicator}"
 
-            if status == "running":
-                self._start_agent_verb_timer(agent_id)
-            elif status == "waiting":
-                self._stop_agent_verb_timer(agent_id)
-            else:
-                self._stop_agent_verb_timer(agent_id)
-
             if agent_node.label != agent_name:
                 agent_node.set_label(agent_name)
                 return True
@@ -1123,9 +1107,14 @@ class StrixTUIApp(App):  # type: ignore[misc]
     ) -> tuple[Text | None, Text, bool]:
         status = agent_data.get("status", "running")
 
-        def keymap_text(msg: str) -> Text:
+        def keymap_styled(keys: list[tuple[str, str]]) -> Text:
             t = Text()
-            t.append(msg, style="dim")
+            for i, (key, action) in enumerate(keys):
+                if i > 0:
+                    t.append(" · ", style="dim")
+                t.append(key, style="white")
+                t.append(" ", style="dim")
+                t.append(action, style="dim")
             return t
 
         simple_statuses: dict[str, tuple[str, str]] = {
@@ -1135,10 +1124,10 @@ class StrixTUIApp(App):  # type: ignore[misc]
         }
 
         if status in simple_statuses:
-            msg, km = simple_statuses[status]
+            msg, _ = simple_statuses[status]
             text = Text()
             text.append(msg)
-            return (text, keymap_text(km), False)
+            return (text, Text(), False)
 
         if status == "llm_failed":
             error_msg = agent_data.get("error_message", "")
@@ -1148,20 +1137,25 @@ class StrixTUIApp(App):  # type: ignore[misc]
             else:
                 text.append("LLM request failed", style="red")
             self._stop_dot_animation()
-            return (text, keymap_text("Send message to retry"), False)
+            keymap = Text()
+            keymap.append("Send message to retry", style="dim")
+            return (text, keymap, False)
 
         if status == "waiting":
-            animated_text = self._get_animated_waiting_text(agent_id)
-            return (animated_text, keymap_text("Send message to resume"), True)
+            keymap = Text()
+            keymap.append("Send message to resume", style="dim")
+            return (Text(" "), keymap, False)
 
         if status == "running":
-            verb = (
-                self._get_agent_verb(agent_id)
-                if self._agent_has_real_activity(agent_id)
-                else "Initializing Agent"
-            )
-            animated_text = self._get_animated_verb_text(agent_id, verb)
-            return (animated_text, keymap_text("ESC to stop | CTRL-C to quit and save"), True)
+            if self._agent_has_real_activity(agent_id):
+                animated_text = Text()
+                animated_text.append_text(self._get_sweep_animation(self._sweep_colors))
+                animated_text.append("esc", style="white")
+                animated_text.append(" ", style="dim")
+                animated_text.append("stop", style="dim")
+                return (animated_text, keymap_styled([("ctrl-q", "quit")]), True)
+            animated_text = self._get_animated_verb_text(agent_id, "Initializing")
+            return (animated_text, keymap_styled([("ctrl-q", "quit")]), True)
 
         return (None, Text(), False)
 
@@ -1266,53 +1260,49 @@ class StrixTUIApp(App):  # type: ignore[misc]
                         return name
         return None
 
-    def _get_agent_verb(self, agent_id: str) -> str:
-        if agent_id not in self._agent_verbs:
-            self._agent_verbs[agent_id] = random.choice(self._action_verbs)  # nosec B311 # noqa: S311
-        return self._agent_verbs[agent_id]
+    def _get_sweep_animation(self, color_palette: list[str]) -> Text:
+        text = Text()
+        num_squares = self._sweep_num_squares
+        num_colors = len(color_palette)
 
-    def _start_agent_verb_timer(self, agent_id: str) -> None:
-        if agent_id not in self._agent_verb_timers:
-            self._agent_verb_timers[agent_id] = self.set_interval(
-                30.0, lambda: self._change_agent_action_verb(agent_id)
-            )
+        offset = num_colors - 1
+        max_pos = (num_squares - 1) + offset
+        total_range = max_pos + offset
+        cycle_length = total_range * 2
+        frame_in_cycle = self._spinner_frame_index % cycle_length
 
-    def _stop_agent_verb_timer(self, agent_id: str) -> None:
-        if agent_id in self._agent_verb_timers:
-            self._agent_verb_timers[agent_id].stop()
-            del self._agent_verb_timers[agent_id]
+        wave_pos = total_range - abs(total_range - frame_in_cycle)
+        sweep_pos = wave_pos - offset
 
-    def _change_agent_action_verb(self, agent_id: str) -> None:
-        if agent_id not in self._agent_verbs:
-            self._agent_verbs[agent_id] = random.choice(self._action_verbs)  # nosec B311 # noqa: S311
-            return
+        dot_color = "#0a3d1f"
 
-        current_verb = self._agent_verbs[agent_id]
-        available_verbs = [verb for verb in self._action_verbs if verb != current_verb]
-        self._agent_verbs[agent_id] = random.choice(available_verbs)  # nosec B311 # noqa: S311
+        for i in range(num_squares):
+            dist = abs(i - sweep_pos)
+            color_idx = max(0, num_colors - 1 - dist)
 
-        if self.selected_agent_id == agent_id:
-            self._update_agent_status_display()
+            if color_idx == 0:
+                text.append("·", style=Style(color=dot_color))
+            else:
+                color = color_palette[color_idx]
+                text.append("▪", style=Style(color=color))
+
+        text.append(" ")
+        return text
 
     def _get_animated_verb_text(self, agent_id: str, verb: str) -> Text:  # noqa: ARG002
         text = Text()
-        spinner_char = self._spinner_frames[self._spinner_frame_index % len(self._spinner_frames)]
-        text.append(spinner_char, style=Style(color="#22c55e"))
-        text.append(" ", style=Style(color="white"))
-        text.append(verb, style=Style(color="white"))
-        return text
-
-    def _get_animated_waiting_text(self, agent_id: str) -> Text:  # noqa: ARG002
-        text = Text()
-        spinner_char = self._spinner_frames[self._spinner_frame_index % len(self._spinner_frames)]
-        text.append(spinner_char, style=Style(color="#fbbf24"))
-        text.append(" ", style=Style(color="white"))
-        text.append("Waiting", style=Style(color="#fbbf24"))
+        sweep = self._get_sweep_animation(self._sweep_colors)
+        text.append_text(sweep)
+        parts = verb.split(" ", 1)
+        text.append(parts[0], style="white")
+        if len(parts) > 1:
+            text.append(" ", style="dim")
+            text.append(parts[1], style="dim")
         return text
 
     def _start_dot_animation(self) -> None:
         if self._dot_animation_timer is None:
-            self._dot_animation_timer = self.set_interval(0.05, self._animate_dots)
+            self._dot_animation_timer = self.set_interval(0.06, self._animate_dots)
 
     def _stop_dot_animation(self) -> None:
         if self._dot_animation_timer is not None:
@@ -1327,9 +1317,12 @@ class StrixTUIApp(App):  # type: ignore[misc]
             status = agent_data.get("status", "running")
             if status in ["running", "waiting"]:
                 has_active_agents = True
-                self._spinner_frame_index = (self._spinner_frame_index + 1) % len(
-                    self._spinner_frames
-                )
+                num_colors = len(self._sweep_colors)
+                offset = num_colors - 1
+                max_pos = (self._sweep_num_squares - 1) + offset
+                total_range = max_pos + offset
+                cycle_length = total_range * 2
+                self._spinner_frame_index = (self._spinner_frame_index + 1) % cycle_length
                 self._update_agent_status_display()
 
         if not has_active_agents:
@@ -1350,7 +1343,9 @@ class StrixTUIApp(App):  # type: ignore[misc]
                 tool_name = tool_data.get("tool_name", "")
                 if tool_name not in initial_tools:
                     return True
-        return False
+
+        streaming = self.tracer.get_streaming_content(agent_id)
+        return bool(streaming and streaming.strip())
 
     def _agent_vulnerability_count(self, agent_id: str) -> int:
         count = 0
@@ -1466,9 +1461,6 @@ class StrixTUIApp(App):  # type: ignore[misc]
         vuln_count = self._agent_vulnerability_count(agent_id)
         vuln_indicator = f" ({vuln_count})" if vuln_count > 0 else ""
         agent_name = f"{status_icon} {agent_name_raw}{vuln_indicator}"
-
-        if status in ["running", "waiting"]:
-            self._start_agent_verb_timer(agent_id)
 
         try:
             if parent_id and parent_id in self.agent_nodes:
@@ -1876,9 +1868,6 @@ class StrixTUIApp(App):  # type: ignore[misc]
             logging.exception(f"Failed to stop agent {agent_id}")
 
     def action_custom_quit(self) -> None:
-        for agent_id in list(self._agent_verb_timers.keys()):
-            self._stop_agent_verb_timer(agent_id)
-
         if self._scan_thread and self._scan_thread.is_alive():
             self._scan_stop_event.set()
 
