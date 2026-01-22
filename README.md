@@ -34,7 +34,9 @@
 <br/>
 
 <div align="center">
-  <img src=".github/screenshot.png" alt="Strix Demo" width="900" style="border-radius: 16px;">
+  <a href="https://strix.ai">
+    <img src=".github/screenshot.png" alt="Strix Demo" width="900" style="border-radius: 16px;">
+  </a>
 </div>
 
 <br>
