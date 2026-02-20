@@ -3,25 +3,11 @@ import re
 from typing import Any
 
 
-STRIX_API_BASE = "https://models.strix.ai/api/v1"
-
 STRIX_PROVIDER_PREFIXES: dict[str, str] = {
     "claude-": "anthropic",
     "gpt-": "openai",
     "gemini-": "gemini",
 }
-
-
-def is_strix_model(model_name: str | None) -> bool:
-    """Check if model uses strix/ prefix."""
-    return bool(model_name and model_name.startswith("strix/"))
-
-
-def get_strix_api_base(model_name: str | None) -> str | None:
-    """Return Strix API base URL if using strix/ model, None otherwise."""
-    if is_strix_model(model_name):
-        return STRIX_API_BASE
-    return None
 
 
 def get_litellm_model_name(model_name: str | None) -> str | None:

@@ -18,7 +18,8 @@ from rich.panel import Panel
 from rich.text import Text
 
 from strix.config import Config, apply_saved_config, save_current_config
-from strix.llm.utils import get_litellm_model_name, get_strix_api_base
+from strix.config.config import resolve_llm_config
+from strix.llm.utils import get_litellm_model_name
 
 
 apply_saved_config()
@@ -52,10 +53,13 @@ def validate_environment() -> None:  # noqa: PLR0912, PLR0915
     missing_required_vars = []
     missing_optional_vars = []
 
-    if not Config.get("strix_llm"):
+    strix_llm = Config.get("strix_llm")
+    uses_strix_models = strix_llm and strix_llm.startswith("strix/")
+
+    if not strix_llm:
         missing_required_vars.append("STRIX_LLM")
 
-    has_base_url = any(
+    has_base_url = uses_strix_models or any(
         [
             Config.get("llm_api_base"),
             Config.get("openai_api_base"),
@@ -97,7 +101,7 @@ def validate_environment() -> None:  # noqa: PLR0912, PLR0915
                 error_text.append("• ", style="white")
                 error_text.append("STRIX_LLM", style="bold cyan")
                 error_text.append(
-                    " - Model name to use with litellm (e.g., 'openai/gpt-5')\n",
+                    " - Model name to use with litellm (e.g., 'anthropic/claude-sonnet-4-6')\n",
                     style="white",
                 )
 
@@ -136,7 +140,10 @@ def validate_environment() -> None:  # noqa: PLR0912, PLR0915
                     )
 
         error_text.append("\nExample setup:\n", style="white")
-        error_text.append("export STRIX_LLM='openai/gpt-5'\n", style="dim white")
+        if uses_strix_models:
+            error_text.append("export STRIX_LLM='strix/claude-sonnet-4.6'\n", style="dim white")
+        else:
+            error_text.append("export STRIX_LLM='anthropic/claude-sonnet-4-6'\n", style="dim white")
 
         if missing_optional_vars:
             for var in missing_optional_vars:
@@ -202,15 +209,7 @@ async def warm_up_llm() -> None:
     console = Console()
 
     try:
-        model_name = Config.get("strix_llm")
-        api_key = Config.get("llm_api_key")
-        api_base = (
-            Config.get("llm_api_base")
-            or Config.get("openai_api_base")
-            or Config.get("litellm_base_url")
-            or Config.get("ollama_api_base")
-            or get_strix_api_base(model_name)
-        )
+        model_name, api_key, api_base = resolve_llm_config()
 
         test_messages = [
             {"role": "system", "content": "You are a helpful assistant."},
