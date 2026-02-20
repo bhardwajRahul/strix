@@ -3,6 +3,40 @@ import re
 from typing import Any
 
 
+STRIX_MODEL_MAP: dict[str, str] = {
+    "claude-sonnet-4.6": "anthropic/claude-sonnet-4-6",
+    "claude-opus-4.6": "anthropic/claude-opus-4-6",
+    "gpt-5.2": "openai/gpt-5.2",
+    "gpt-5.1": "openai/gpt-5.1",
+    "gpt-5": "openai/gpt-5",
+    "gpt-5.2-codex": "openai/gpt-5.2-codex",
+    "gpt-5.1-codex-max": "openai/gpt-5.1-codex-max",
+    "gpt-5.1-codex": "openai/gpt-5.1-codex",
+    "gpt-5-codex": "openai/gpt-5-codex",
+    "gemini-3-pro-preview": "gemini/gemini-3-pro-preview",
+    "gemini-3-flash-preview": "gemini/gemini-3-flash-preview",
+    "glm-5": "openrouter/z-ai/glm-5",
+    "glm-4.7": "openrouter/z-ai/glm-4.7",
+}
+
+
+def resolve_strix_model(model_name: str | None) -> tuple[str | None, str | None]:
+    """Resolve a strix/ model into names for API calls and capability lookups.
+
+    Returns (api_model, canonical_model):
+    - api_model: openai/<base> for API calls (Strix API is OpenAI-compatible)
+    - canonical_model: actual provider model name for litellm capability lookups
+    Non-strix models return the same name for both.
+    """
+    if not model_name or not model_name.startswith("strix/"):
+        return model_name, model_name
+
+    base_model = model_name[6:]
+    api_model = f"openai/{base_model}"
+    canonical_model = STRIX_MODEL_MAP.get(base_model, api_model)
+    return api_model, canonical_model
+
+
 def _truncate_to_first_function(content: str) -> str:
     if not content:
         return content
