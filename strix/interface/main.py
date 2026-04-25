@@ -453,7 +453,7 @@ def display_completion_message(args: argparse.Namespace, results_path: Path) -> 
 
     stats_text = build_final_stats_text(tracer)
 
-    panel_parts = [completion_text, "\n\n", target_text]
+    panel_parts: list[Text | str] = [completion_text, "\n\n", target_text]
 
     if stats_text.plain:
         panel_parts.extend(["\n", stats_text])

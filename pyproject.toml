@@ -312,6 +312,10 @@ ignore = [
 # walks every supported target type — splitting it into per-type
 # helpers would add indirection without simplifying anything.
 "strix/sdk_entry.py" = ["TC003", "PLR0912"]
+# Legacy interface utility with intentionally many branches per supported
+# scope-mode / target-type combination; refactor would obscure the
+# decision tree without simplifying it.
+"strix/interface/utils.py" = ["PLR0912"]
 # Sandbox dispatch helper has many short-circuit error returns (auth fail,
 # size cap, decode fail, etc). Each is a distinct, documented failure mode
 # the model needs to see verbatim — collapsing them harms readability.

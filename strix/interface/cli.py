@@ -11,7 +11,9 @@ from rich.panel import Panel
 from rich.text import Text
 
 from strix.agents.StrixAgent import StrixAgent
+from strix.interface.sdk_dispatch import run_scan_via_sdk, should_use_sdk_harness
 from strix.llm.config import LLMConfig
+from strix.runtime import cleanup_runtime
 from strix.telemetry.tracer import Tracer, set_global_tracer
 
 from .utils import (
@@ -109,8 +111,6 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
     tracer.vulnerability_found_callback = display_vulnerability
 
     def cleanup_on_exit() -> None:
-        from strix.runtime import cleanup_runtime
-
         tracer.cleanup()
         cleanup_runtime()
 
@@ -163,18 +163,29 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
             update_thread.start()
 
             try:
-                agent = StrixAgent(agent_config)
-                result = await agent.execute_scan(scan_config)
+                if should_use_sdk_harness():
+                    # SDK harness opt-in (PLAYBOOK §7.1). Returns a
+                    # RunResult, not the legacy success-dict shape, so
+                    # we skip the legacy error-extraction block —
+                    # failures inside run_strix_scan raise instead.
+                    await run_scan_via_sdk(
+                        scan_config=scan_config,
+                        args=args,
+                        tracer=tracer,
+                    )
+                else:
+                    agent = StrixAgent(agent_config)
+                    result = await agent.execute_scan(scan_config)
 
-                if isinstance(result, dict) and not result.get("success", True):
-                    error_msg = result.get("error", "Unknown error")
-                    error_details = result.get("details")
-                    console.print()
-                    console.print(f"[bold red]Penetration test failed:[/] {error_msg}")
-                    if error_details:
-                        console.print(f"[dim]{error_details}[/]")
-                    console.print()
-                    sys.exit(1)
+                    if isinstance(result, dict) and not result.get("success", True):
+                        error_msg = result.get("error", "Unknown error")
+                        error_details = result.get("details")
+                        console.print()
+                        console.print(f"[bold red]Penetration test failed:[/] {error_msg}")
+                        if error_details:
+                            console.print(f"[dim]{error_details}[/]")
+                        console.print()
+                        sys.exit(1)
             finally:
                 stop_updates.set()
                 update_thread.join(timeout=1)

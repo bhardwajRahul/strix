@@ -55,7 +55,7 @@ def get_cvss_color(cvss_score: float) -> str:
     return "#6b7280"
 
 
-def format_vulnerability_report(report: dict[str, Any]) -> Text:  # noqa: PLR0912, PLR0915
+def format_vulnerability_report(report: dict[str, Any]) -> Text:  # noqa: PLR0915
     """Format a vulnerability report for CLI display with all rich fields."""
     field_style = "bold #4ade80"
 
@@ -823,7 +823,7 @@ def _truncate_file_list(
     return files[:max_files], True
 
 
-def build_diff_scope_instruction(scopes: list[RepoDiffScope]) -> str:  # noqa: PLR0912
+def build_diff_scope_instruction(scopes: list[RepoDiffScope]) -> str:
     lines = [
         "The user is requesting a review of a Pull Request.",
         "Instruction: Direct your analysis primarily at the changes in the listed files. "
@@ -1049,7 +1049,7 @@ def resolve_diff_scope_context(
         )
 
     instruction_block = build_diff_scope_instruction(repo_scopes)
-    metadata: dict[str, Any] = {
+    metadata = {
         "active": True,
         "mode": scope_mode,
         "repos": [scope.to_metadata() for scope in repo_scopes],
@@ -1082,7 +1082,7 @@ def _is_http_git_repo(url: str) -> bool:
         return False
 
 
-def infer_target_type(target: str) -> tuple[str, dict[str, str]]:  # noqa: PLR0911, PLR0912
+def infer_target_type(target: str) -> tuple[str, dict[str, str]]:  # noqa: PLR0911
     if not target or not isinstance(target, str):
         raise ValueError("Target must be a non-empty string")
 
@@ -1248,7 +1248,7 @@ def _is_localhost_host(host: str) -> bool:
 
 
 def rewrite_localhost_targets(targets_info: list[dict[str, Any]], host_gateway: str) -> None:
-    from yarl import URL  # type: ignore[import-not-found]
+    from yarl import URL
 
     for target_info in targets_info:
         target_type = target_info.get("type")
