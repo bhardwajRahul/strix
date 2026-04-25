@@ -146,7 +146,18 @@ class StrixOrchestrationHooks(RunHooks[Any]):
             if bus is None or me is None:
                 return
             crashed = (output is None) or not ctx.get("agent_finish_called", False)
-            final_status = "crashed" if crashed else "completed"
+
+            # Interactive root agents stay alive across ``Runner.run`` cycles —
+            # ``entry.run_strix_scan``'s outer loop re-invokes ``Runner.run``
+            # whenever the user sends a follow-up message, so we just park
+            # the agent (status=waiting) instead of finalizing.
+            is_interactive_root = (
+                ctx.get("parent_id") is None and bool(ctx.get("interactive", False)) and not crashed
+            )
+
+            final_status = (
+                "waiting" if is_interactive_root else ("crashed" if crashed else "completed")
+            )
 
             tracer = ctx.get("tracer")
             if tracer is not None and me in tracer.agents:
@@ -166,7 +177,15 @@ class StrixOrchestrationHooks(RunHooks[Any]):
                         "type": "crash",
                     },
                 )
-            await bus.finalize(me, final_status)
+
+            if is_interactive_root:
+                await bus.park(me)
+                # Reset the per-cycle flag so the next ``Runner.run`` invocation
+                # can detect a fresh ``finish_scan`` call.
+                ctx["agent_finish_called"] = False
+                ctx["turn_count"] = 0
+            else:
+                await bus.finalize(me, final_status)
         except Exception:
             logger.exception("on_agent_end failed")
 

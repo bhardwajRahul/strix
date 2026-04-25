@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from pathlib import Path
@@ -256,6 +257,7 @@ async def run_strix_scan(
             model=resolved_model,
             max_turns=max_turns,
             is_whitebox=is_whitebox,
+            interactive=interactive,
             diff_scope=diff_scope,
             run_id=run_id,
             agent_factory=agent_factory,
@@ -283,15 +285,51 @@ async def run_strix_scan(
         session = SQLiteSession(session_id=scan_id, db_path=session_db)
 
         task_text = _build_root_task(scan_config)
-        return await Runner.run(
+        hooks = StrixOrchestrationHooks()
+
+        result = await Runner.run(
             root_agent,
             input=task_text,
             session=session,
             run_config=run_config,
             context=context,
-            hooks=StrixOrchestrationHooks(),
+            hooks=hooks,
             max_turns=max_turns,
         )
+
+        if not interactive:
+            return result
+
+        # Interactive mode: SDK demo-loop pattern. The root agent is
+        # parked (not finalized) by ``StrixOrchestrationHooks.on_agent_end``
+        # at the end of each cycle, so ``bus.send`` from the TUI still
+        # accepts user messages between cycles. Wake on the next message,
+        # drain it, and re-invoke ``Runner.run`` with the appended input —
+        # the SQLite session preserves the prior conversation, so the
+        # agent picks up with full context.
+        while True:
+            try:
+                await bus.wait_for_message(root_id)
+            except asyncio.CancelledError:
+                return result
+            pending = await bus.drain(root_id)
+            if not pending:
+                continue
+            next_input = "\n\n".join(
+                str(msg.get("content", "")).strip() for msg in pending if msg.get("content")
+            )
+            if not next_input:
+                continue
+
+            result = await Runner.run(
+                root_agent,
+                input=next_input,
+                session=session,
+                run_config=run_config,
+                context=context,
+                hooks=hooks,
+                max_turns=max_turns,
+            )
     except BaseException:
         # Cancel any descendant tasks the root spawned before unwinding.
         # cancel_descendants is idempotent and handles the empty-tree case.

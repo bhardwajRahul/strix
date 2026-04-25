@@ -450,6 +450,7 @@ async def create_agent(
         model_settings=inner.get("model_settings"),
         max_turns=int(inner.get("max_turns", 300)),
         is_whitebox=bool(inner.get("is_whitebox", False)),
+        interactive=bool(inner.get("interactive", False)),
         diff_scope=inner.get("diff_scope"),
         run_id=inner.get("run_id"),
         agent_factory=factory,

@@ -38,6 +38,7 @@ class AgentMessageBus:
     names: dict[str, str] = field(default_factory=dict)
     stats_live: dict[str, dict[str, Any]] = field(default_factory=dict)
     stats_completed: dict[str, dict[str, Any]] = field(default_factory=dict)
+    _events: dict[str, asyncio.Event] = field(default_factory=dict)
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     async def register(
@@ -72,6 +73,23 @@ class AgentMessageBus:
             if self.statuses[target] in ("completed", "crashed", "stopped"):
                 return
             self.inboxes.setdefault(target, []).append(msg)
+            event = self._events.get(target)
+            if event is not None:
+                event.set()
+
+    async def wait_for_message(self, agent_id: str) -> None:
+        """Block until ``agent_id``'s inbox has at least one pending message.
+
+        Used by the interactive-mode outer loop in :func:`run_strix_scan` to
+        wake on the next user message between ``Runner.run`` cycles. Cheap
+        if the inbox already has content (returns immediately).
+        """
+        async with self._lock:
+            if self.inboxes.get(agent_id):
+                return
+            event = self._events.setdefault(agent_id, asyncio.Event())
+            event.clear()
+        await event.wait()
 
     async def drain(self, agent_id: str) -> list[dict[str, Any]]:
         """Atomically read and clear ``agent_id``'s pending messages.
@@ -117,6 +135,20 @@ class AgentMessageBus:
             self.inboxes.pop(agent_id, None)
             self.parent_of.pop(agent_id, None)
             self.names.pop(agent_id, None)
+            self._events.pop(agent_id, None)
+
+    async def park(self, agent_id: str) -> None:
+        """Mark an agent as ``waiting`` without finalizing.
+
+        Used in interactive mode for the root agent between ``Runner.run``
+        cycles: the run completed, but the agent stays alive on the bus
+        so user messages still land in its inbox until the next cycle
+        starts. Stats stay live (will be merged on actual finalize at
+        scan teardown).
+        """
+        async with self._lock:
+            if agent_id in self.statuses:
+                self.statuses[agent_id] = "waiting"
 
     async def total_stats(self) -> dict[str, Any]:
         """Snapshot of live + completed stats."""
