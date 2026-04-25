@@ -1,12 +1,8 @@
 """Jinja-based system-prompt renderer.
 
-Loads ``strix/agents/prompts/system_prompt.jinja`` (508 lines — the
-multi-section production prompt with skills, tools, scan modes, etc.)
-and renders it with the caller's per-run context (scan mode, whitebox,
-interactive, scope authorization block).
-
-References:
-    - HARNESS_WIKI.md §4.1 (system prompt assembly)
+Loads ``strix/agents/prompts/system_prompt.jinja`` and renders it with
+the caller's per-run context (skills, scan mode, whitebox flag,
+interactive flag, scope authorization block).
 """
 
 from __future__ import annotations

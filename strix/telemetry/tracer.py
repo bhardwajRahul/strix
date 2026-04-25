@@ -57,8 +57,6 @@ class Tracer:
         self.agents: dict[str, dict[str, Any]] = {}
         self.tool_executions: dict[int, dict[str, Any]] = {}
         self.chat_messages: list[dict[str, Any]] = []
-        self.streaming_content: dict[str, str] = {}
-        self.interrupted_content: dict[str, str] = {}
 
         self.vulnerability_reports: list[dict[str, Any]] = []
         self.final_scan_result: str | None = None
@@ -447,33 +445,6 @@ class Tracer:
         self.save_run_data(mark_complete=True)
         posthog.end(self, exit_reason="finished_by_tool")
 
-    def log_agent_creation(
-        self,
-        agent_id: str,
-        name: str,
-        task: str,
-        parent_id: str | None = None,
-    ) -> None:
-        agent_data: dict[str, Any] = {
-            "id": agent_id,
-            "name": name,
-            "task": task,
-            "status": "running",
-            "parent_id": parent_id,
-            "created_at": datetime.now(UTC).isoformat(),
-            "updated_at": datetime.now(UTC).isoformat(),
-            "tool_executions": [],
-        }
-
-        self.agents[agent_id] = agent_data
-        self._emit_event(
-            "agent.created",
-            actor={"agent_id": agent_id, "agent_name": name},
-            payload={"task": task, "parent_id": parent_id},
-            status="running",
-            source="strix.agents",
-        )
-
     def log_chat_message(
         self,
         content: str,
@@ -502,110 +473,6 @@ class Tracer:
             source="strix.chat",
         )
         return message_id
-
-    def log_tool_execution_start(
-        self,
-        agent_id: str,
-        tool_name: str,
-        args: dict[str, Any],
-    ) -> int:
-        execution_id = self._next_execution_id
-        self._next_execution_id += 1
-
-        now = datetime.now(UTC).isoformat()
-        execution_data = {
-            "execution_id": execution_id,
-            "agent_id": agent_id,
-            "tool_name": tool_name,
-            "args": args,
-            "status": "running",
-            "result": None,
-            "timestamp": now,
-            "started_at": now,
-            "completed_at": None,
-        }
-
-        self.tool_executions[execution_id] = execution_data
-
-        if agent_id in self.agents:
-            self.agents[agent_id]["tool_executions"].append(execution_id)
-
-        self._emit_event(
-            "tool.execution.started",
-            actor={
-                "agent_id": agent_id,
-                "tool_name": tool_name,
-                "execution_id": execution_id,
-            },
-            payload={"args": args},
-            status="running",
-            source="strix.tools",
-        )
-
-        return execution_id
-
-    def update_tool_execution(
-        self,
-        execution_id: int,
-        status: str,
-        result: Any | None = None,
-    ) -> None:
-        if execution_id not in self.tool_executions:
-            return
-
-        tool_data = self.tool_executions[execution_id]
-        tool_data["status"] = status
-        tool_data["result"] = result
-        tool_data["completed_at"] = datetime.now(UTC).isoformat()
-
-        tool_name = str(tool_data.get("tool_name", "unknown"))
-        agent_id = str(tool_data.get("agent_id", "unknown"))
-        error_payload = result if status in {"error", "failed"} else None
-
-        self._emit_event(
-            "tool.execution.updated",
-            actor={
-                "agent_id": agent_id,
-                "tool_name": tool_name,
-                "execution_id": execution_id,
-            },
-            payload={"result": result},
-            status=status,
-            error=error_payload,
-            source="strix.tools",
-        )
-
-        if tool_name == "create_vulnerability_report":
-            finding_status = "reviewed" if status == "completed" else "rejected"
-            self._emit_event(
-                "finding.reviewed",
-                actor={"agent_id": agent_id, "tool_name": tool_name},
-                payload={"execution_id": execution_id, "result": result},
-                status=finding_status,
-                error=error_payload,
-                source="strix.findings",
-            )
-
-    def update_agent_status(
-        self,
-        agent_id: str,
-        status: str,
-        error_message: str | None = None,
-    ) -> None:
-        if agent_id in self.agents:
-            self.agents[agent_id]["status"] = status
-            self.agents[agent_id]["updated_at"] = datetime.now(UTC).isoformat()
-            if error_message:
-                self.agents[agent_id]["error_message"] = error_message
-
-        self._emit_event(
-            "agent.status.updated",
-            actor={"agent_id": agent_id},
-            payload={"error_message": error_message},
-            status=status,
-            error=error_message,
-            source="strix.agents",
-        )
 
     def set_scan_config(self, config: dict[str, Any]) -> None:
         self.scan_config = config
@@ -804,13 +671,6 @@ class Tracer:
             pass
         return 0.0
 
-    def get_agent_tools(self, agent_id: str) -> list[dict[str, Any]]:
-        return [
-            exec_data
-            for exec_data in list(self.tool_executions.values())
-            if exec_data.get("agent_id") == agent_id
-        ]
-
     def get_real_tool_count(self) -> int:
         return sum(
             1
@@ -878,29 +738,6 @@ class Tracer:
         target["cached_tokens"] += cached_tokens
         target["cost"] += cost
         target["requests"] += requests
-
-    def update_streaming_content(self, agent_id: str, content: str) -> None:
-        self.streaming_content[agent_id] = content
-
-    def clear_streaming_content(self, agent_id: str) -> None:
-        self.streaming_content.pop(agent_id, None)
-
-    def get_streaming_content(self, agent_id: str) -> str | None:
-        return self.streaming_content.get(agent_id)
-
-    def finalize_streaming_as_interrupted(self, agent_id: str) -> str | None:
-        content = self.streaming_content.pop(agent_id, None)
-        if content and content.strip():
-            self.interrupted_content[agent_id] = content
-            self.log_chat_message(
-                content=content,
-                role="assistant",
-                agent_id=agent_id,
-                metadata={"interrupted": True},
-            )
-            return content
-
-        return self.interrupted_content.pop(agent_id, None)
 
     def cleanup(self) -> None:
         self.save_run_data(mark_complete=True)

@@ -17,7 +17,6 @@ class Config:
     ollama_api_base = None
     strix_reasoning_effort = "high"
     strix_llm_max_retries = "5"
-    strix_memory_compressor_timeout = "30"
     llm_timeout = "300"
     _LLM_CANONICAL_NAMES = (
         "strix_llm",
@@ -28,7 +27,6 @@ class Config:
         "ollama_api_base",
         "strix_reasoning_effort",
         "strix_llm_max_retries",
-        "strix_memory_compressor_timeout",
         "llm_timeout",
     )
 

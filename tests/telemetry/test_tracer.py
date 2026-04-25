@@ -39,21 +39,15 @@ def test_tracer_local_mode_writes_jsonl_with_correlation(
     tracer = Tracer("local-observability")
     set_global_tracer(tracer)
     tracer.set_scan_config({"targets": ["https://example.com"], "user_instructions": "focus auth"})
-    tracer.log_agent_creation("agent-1", "Root Agent", "scan auth")
     tracer.log_chat_message("starting scan", "user", "agent-1")
-    execution_id = tracer.log_tool_execution_start(
-        "agent-1",
-        "send_request",
-        {"url": "https://example.com/login"},
-    )
-    tracer.update_tool_execution(execution_id, "completed", {"status_code": 200, "body": "ok"})
+    tracer.log_chat_message("scanning login form", "assistant", "agent-1")
 
     events_path = tmp_path / "strix_runs" / "local-observability" / "events.jsonl"
     assert events_path.exists()
 
     events = _load_events(events_path)
-    assert any(event["event_type"] == "tool.execution.updated" for event in events)
-    assert not any(event["event_type"] == "traffic.intercepted" for event in events)
+    assert any(event["event_type"] == "chat.message" for event in events)
+    assert any(event["event_type"] == "run.configured" for event in events)
 
     for event in events:
         assert event["run_id"] == "local-observability"
@@ -66,19 +60,14 @@ def test_tracer_redacts_sensitive_payloads(monkeypatch: pytest.MonkeyPatch, tmp_
 
     tracer = Tracer("redaction-run")
     set_global_tracer(tracer)
-    execution_id = tracer.log_tool_execution_start(
+    tracer.log_chat_message(
+        "request failed with token sk-secret-token-value",
+        "assistant",
         "agent-1",
-        "send_request",
-        {
-            "url": "https://example.com",
+        metadata={
             "api_key": "sk-secret-token-value",
             "authorization": "Bearer super-secret-token",
         },
-    )
-    tracer.update_tool_execution(
-        execution_id,
-        "error",
-        {"error": "request failed with token sk-secret-token-value"},
     )
 
     events_path = tmp_path / "strix_runs" / "redaction-run" / "events.jsonl"
@@ -255,7 +244,10 @@ def test_events_with_agent_id_include_agent_name(
 
     tracer = Tracer("agent-name-enrichment")
     set_global_tracer(tracer)
-    tracer.log_agent_creation("agent-1", "Root Agent", "scan auth")
+    # _enrich_actor pulls names from the tracer's agents dict; populate it
+    # the same way the orchestration path will once wired (placeholder
+    # until live wiring lands).
+    tracer.agents["agent-1"] = {"name": "Root Agent"}
     tracer.log_chat_message("hello", "assistant", "agent-1")
 
     events_path = tmp_path / "strix_runs" / "agent-name-enrichment" / "events.jsonl"
