@@ -298,6 +298,7 @@ ignore = [
 "strix/tools/terminal/terminal_sdk_tool.py" = ["TC002"]
 "strix/tools/python/python_sdk_tool.py" = ["TC002"]
 "strix/tools/proxy/proxy_sdk_tools.py" = ["TC002"]
+"strix/tools/agents_graph/agents_graph_sdk_tools.py" = ["TC002"]
 # Sandbox dispatch helper has many short-circuit error returns (auth fail,
 # size cap, decode fail, etc). Each is a distinct, documented failure mode
 # the model needs to see verbatim — collapsing them harms readability.

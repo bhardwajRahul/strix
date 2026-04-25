@@ -27,6 +27,7 @@ from agents.retry import (
     retry_policies,
 )
 from agents.sandbox import SandboxRunConfig
+from openai.types.shared import Reasoning
 
 from strix.llm.multi_provider_setup import build_multi_provider
 from strix.orchestration.filter import inject_messages_filter
@@ -130,8 +131,6 @@ def make_run_config(
         ),
     )
     if reasoning_effort is not None:
-        from openai.types.shared import Reasoning
-
         base_settings = base_settings.resolve(
             ModelSettings(reasoning=Reasoning(effort=reasoning_effort)),
         )
@@ -174,6 +173,8 @@ def make_agent_context(
     is_whitebox: bool = False,
     diff_scope: dict[str, Any] | None = None,
     run_id: str | None = None,
+    sandbox_client: Any | None = None,
+    agent_factory: Any | None = None,
 ) -> dict[str, Any]:
     """Build the per-agent ``context`` dict passed to ``Runner.run(context=...)``.
 
@@ -184,10 +185,17 @@ def make_agent_context(
     C21 (AUDIT_R3): includes ``is_whitebox``, ``diff_scope`` and ``run_id``
     fields that the legacy code relied on but the original PLAYBOOK §2.10
     skeleton omitted.
+
+    ``agent_factory`` is a callable ``(name, skills) -> agents.Agent`` used by
+    the ``create_agent`` graph tool to spin up children. The actual factory
+    lives in the Phase 4/5 root-assembly module; Phase 3 only requires that
+    it be present in context. ``sandbox_client`` is the host-side Docker
+    subclass; ``create_agent`` reuses it across child runs.
     """
     return {
         "bus": bus,
         "sandbox_session": sandbox_session,
+        "sandbox_client": sandbox_client,
         "sandbox_token": sandbox_token,
         "tool_server_host_port": tool_server_host_port,
         "caido_host_port": caido_host_port,
@@ -203,4 +211,5 @@ def make_agent_context(
         "is_whitebox": is_whitebox,
         "diff_scope": diff_scope,
         "run_id": run_id,
+        "agent_factory": agent_factory,
     }
