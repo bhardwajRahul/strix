@@ -383,8 +383,8 @@ async def repeat_request(
 
     The standard pentesting workflow with this tool:
 
-    1. ``browser_action`` (or live target traffic) → request gets
-       captured by Caido.
+    1. ``agent-browser`` (via ``exec_command``) or live target traffic
+       → request gets captured by Caido.
     2. ``list_requests`` → find the request ID you want to manipulate.
     3. ``repeat_request`` → send a modified version (auth-bypass test,
        payload injection, parameter tampering).

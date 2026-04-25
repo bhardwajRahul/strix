@@ -49,14 +49,7 @@ dependencies = [
 strix = "strix.interface.main:main"
 
 [project.optional-dependencies]
-sandbox = [
-  "fastapi",
-  "uvicorn",
-  "ipython>=9.3.0",
-  "openhands-aci>=0.3.0",
-  "playwright>=1.48.0",
-  "libtmux>=0.46.2",
-]
+sandbox = []
 
 [dependency-groups]
 dev = [
@@ -104,20 +97,13 @@ pretty = true
 [[tool.mypy.overrides]]
 module = [
     "litellm.*",
-    "numpydoc.*",
     "rich.*",
-    "IPython.*",
-    "openhands_aci.*",
-    "playwright.*",
-    "uvicorn.*",
     "jinja2.*",
     "pydantic_settings.*",
     "jwt.*",
     "httpx.*",
     "gql.*",
     "textual.*",
-    "pyte.*",
-    "libtmux.*",
     "cvss.*",
     "scrubadub.*",
     "docker.*",
@@ -246,10 +232,6 @@ ignore = [
 "strix/tools/todo/tools.py" = ["TC002"]
 "strix/tools/thinking/tool.py" = ["TC002"]
 "strix/tools/web_search/tool.py" = ["TC002"]
-"strix/tools/file_edit/tools.py" = ["TC002"]
-"strix/tools/browser/tool.py" = ["TC002"]
-"strix/tools/terminal/tool.py" = ["TC002"]
-"strix/tools/python/tool.py" = ["TC002"]
 "strix/tools/proxy/tools.py" = ["TC002", "PLR0911"]
 "strix/tools/agents_graph/tools.py" = ["TC002"]
 "strix/agents/factory.py" = ["TC002"]
@@ -272,14 +254,6 @@ ignore = [
 "strix/interface/main.py" = ["BLE001", "PLC0415", "PLR0912", "PLR0915"]
 "strix/interface/streaming_parser.py" = ["PLC0415"]
 "strix/interface/tool_components/agent_message_renderer.py" = ["PLC0415"]
-# Each short-circuit error return in the sandbox dispatch is a distinct,
-# documented failure mode the model needs to see verbatim.
-"strix/tools/_sandbox_dispatch.py" = ["PLR0911"]
-# StrixSession + StrixTracingProcessor catch broad Exception
-# intentionally: compressor / sanitizer / disk failures must not tear
-# down the run. Calls already log at exception level.
-"strix/llm/strix_session.py" = ["BLE001"]
-"strix/telemetry/strix_processor.py" = ["BLE001"]
 
 [tool.ruff.lint.isort]
 force-single-line = false

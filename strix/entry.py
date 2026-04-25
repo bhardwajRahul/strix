@@ -15,7 +15,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import uuid
 from pathlib import Path
@@ -35,7 +34,7 @@ from strix.run_config_factory import (
 )
 from strix.sandbox import session_manager
 from strix.sandbox.caido_bootstrap import bootstrap_caido_client
-from strix.sandbox.healthcheck import wait_for_http_ready, wait_for_tcp_ready
+from strix.sandbox.healthcheck import wait_for_tcp_ready
 
 
 if TYPE_CHECKING:
@@ -208,20 +207,13 @@ async def run_strix_scan(
         sources_path=sources_path,
     )
 
-    # Wait for the in-container FastAPI tool server + Caido sidecar to
-    # come up before any agent fires its first tool call.
-    await asyncio.gather(
-        wait_for_http_ready(
-            f"http://127.0.0.1:{bundle['tool_server_host_port']}/health",
-            timeout=60.0,
-        ),
-        wait_for_tcp_ready(
-            "127.0.0.1",
-            int(bundle["caido_host_port"]),
-            timeout=60.0,
-        ),
+    # Wait for the Caido sidecar to come up before any agent fires its
+    # first request, then bootstrap the host-side Caido client.
+    await wait_for_tcp_ready(
+        "127.0.0.1",
+        int(bundle["caido_host_port"]),
+        timeout=60.0,
     )
-
     caido_client = await bootstrap_caido_client(int(bundle["caido_host_port"]))
     bundle["caido_client"] = caido_client
 
@@ -257,8 +249,6 @@ async def run_strix_scan(
             bus=bus,
             sandbox_session=bundle["session"],
             sandbox_client=bundle["client"],
-            sandbox_token=bundle["bearer"],
-            tool_server_host_port=bundle["tool_server_host_port"],
             caido_host_port=bundle["caido_host_port"],
             caido_client=caido_client,
             agent_id=root_id,

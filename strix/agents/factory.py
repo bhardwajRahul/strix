@@ -21,8 +21,9 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from agents import Agent
 from agents.agent import StopAtTools
+from agents.sandbox import SandboxAgent
+from agents.sandbox.capabilities import Filesystem, Shell
 from agents.tool import Tool
 
 from strix.agents.prompt import render_system_prompt
@@ -33,12 +34,6 @@ from strix.tools.agents_graph.tools import (
     send_message_to_agent,
     view_agent_graph,
     wait_for_message,
-)
-from strix.tools.browser.tool import browser_action
-from strix.tools.file_edit.tools import (
-    list_files,
-    search_files,
-    str_replace_editor,
 )
 from strix.tools.finish.tool import finish_scan
 from strix.tools.notes.tools import (
@@ -55,9 +50,7 @@ from strix.tools.proxy.tools import (
     send_request,
     view_request,
 )
-from strix.tools.python.tool import python_action
 from strix.tools.reporting.tool import create_vulnerability_report
-from strix.tools.terminal.tool import terminal_execute
 from strix.tools.thinking.tool import think
 from strix.tools.todo.tools import (
     create_todo,
@@ -73,7 +66,10 @@ from strix.tools.web_search.tool import web_search
 logger = logging.getLogger(__name__)
 
 
-# Tools every Strix agent has, root or child.
+# Host-side Strix tools. Sandbox shell + filesystem are added per-run
+# by the SDK via the ``Shell`` and ``Filesystem`` capabilities below
+# (they bind to the live sandbox session and emit ``exec_command`` /
+# ``write_stdin`` / ``apply_patch`` / ``view_image`` function tools).
 _BASE_TOOLS: tuple[Tool, ...] = (
     # Thinking + planning
     think,
@@ -94,16 +90,8 @@ _BASE_TOOLS: tuple[Tool, ...] = (
     # tool itself returns a structured error when not configured, so
     # always exposing it is safe)
     web_search,
-    # File edit (sandbox-bound)
-    str_replace_editor,
-    list_files,
-    search_files,
     # Reporting
     create_vulnerability_report,
-    # Sandbox primitives
-    browser_action,
-    terminal_execute,
-    python_action,
     # Caido HTTP/HTTPS proxy
     list_requests,
     view_request,
@@ -128,8 +116,15 @@ def build_strix_agent(
     is_whitebox: bool = False,
     interactive: bool = False,
     system_prompt_context: dict[str, Any] | None = None,
-) -> Agent[Any]:
-    """Build an ``agents.Agent`` configured for either root or child use.
+) -> SandboxAgent[Any]:
+    """Build a ``SandboxAgent`` configured for either root or child use.
+
+    The ``Shell`` and ``Filesystem`` capabilities are added unbound; the
+    SDK's runtime binds them per-run against the live sandbox session
+    set on ``RunConfig.sandbox`` and merges their tools (``exec_command``,
+    ``write_stdin``, ``apply_patch``, ``view_image``) into the agent's
+    final tool list. We deliberately exclude ``Compaction`` (OpenAI
+    Responses API only).
 
     Args:
         name: Agent name. Surfaces in traces and the bus's ``names`` map.
@@ -149,11 +144,6 @@ def build_strix_agent(
         system_prompt_context: Free-form dict the prompt template
             renders into the ``system_prompt_context`` variable —
             today carries the scan scope / authorization block.
-
-    Returns the ``Agent`` instance with ``model=None`` so the
-    ``RunConfig.model`` (built by ``make_run_config``) drives provider
-    selection. ``agents.Agent`` is generic on context type; we let
-    the caller's ``Runner.run(context=...)`` typing determine that.
     """
     instructions = render_system_prompt(
         skills=skills,
@@ -163,9 +153,6 @@ def build_strix_agent(
         system_prompt_context=system_prompt_context,
     )
 
-    # Tool list + termination tool depend on is_root. The tuple-then-
-    # list dance keeps _BASE_TOOLS immutable so concurrent agent builds
-    # can't accidentally mutate each other's tool list.
     if is_root:
         tools: list[Tool] = [*_BASE_TOOLS, finish_scan]
         stop_at = ("finish_scan",)
@@ -173,7 +160,7 @@ def build_strix_agent(
         tools = [*_BASE_TOOLS, agent_finish]
         stop_at = ("agent_finish",)
 
-    return Agent(
+    return SandboxAgent(
         name=name,
         instructions=instructions,
         tools=tools,
@@ -181,6 +168,7 @@ def build_strix_agent(
         # model=None so ``RunConfig.model`` drives provider selection
         # via :func:`build_multi_provider` rather than the SDK's default.
         model=None,
+        capabilities=[Filesystem(), Shell()],
     )
 
 
@@ -201,7 +189,7 @@ def make_child_factory(
     ``create_agent`` having to know about them.
     """
 
-    def _factory(*, name: str, skills: list[str]) -> Agent[Any]:
+    def _factory(*, name: str, skills: list[str]) -> SandboxAgent[Any]:
         return build_strix_agent(
             name=name,
             skills=skills,

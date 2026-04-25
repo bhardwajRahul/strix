@@ -34,10 +34,13 @@ def _resolve_skills(
 
     1. Whatever the caller asked for, in order.
     2. ``scan_modes/<mode>`` (always).
-    3. Whitebox-specific skills if applicable.
+    3. ``tooling/agent_browser`` (always — every agent has shell + the
+       agent-browser CLI).
+    4. Whitebox-specific skills if applicable.
     """
     ordered: list[str] = list(requested or [])
     ordered.append(f"scan_modes/{scan_mode}")
+    ordered.append("tooling/agent_browser")
     if is_whitebox:
         ordered.append("coordination/source_aware_whitebox")
         ordered.append("custom/source_aware_sast")

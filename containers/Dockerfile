@@ -39,7 +39,6 @@ RUN apt-get update && \
     nodejs npm pipx \
     libcap2-bin \
     gdb \
-    tmux \
     libnss3 libnspr4 libdbus-1-3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libatspi2.0-0 \
     libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libxkbcommon0 libpango-1.0-0 libcairo2 libasound2t64 \
     fonts-unifont fonts-noto-color-emoji fonts-freefont-ttf fonts-dejavu-core ttf-bitstream-vera \
@@ -95,7 +94,14 @@ RUN npm install -g retire@latest && \
     npm install -g eslint@latest && \
     npm install -g js-beautify@latest && \
     npm install -g @ast-grep/cli@latest && \
-    npm install -g tree-sitter-cli@latest
+    npm install -g tree-sitter-cli@latest && \
+    npm install -g agent-browser@0.26.0
+
+USER root
+RUN agent-browser install --with-deps
+
+USER pentester
+RUN agent-browser install && agent-browser doctor --offline --quick
 
 RUN set -eux; \
     TS_PARSER_DIR="/home/pentester/.tree-sitter/parsers"; \
@@ -193,22 +199,11 @@ ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 
 RUN mkdir -p /workspace && chown -R pentester:pentester /workspace /app
 
-COPY pyproject.toml uv.lock ./
-RUN echo "# Sandbox Environment" > README.md && mkdir -p strix && touch strix/__init__.py
-
 USER pentester
-RUN uv sync --frozen --no-dev --extra sandbox
-RUN /app/.venv/bin/python -m playwright install chromium
-
-RUN uv pip install -r /home/pentester/tools/jwt_tool/requirements.txt && \
+RUN pipx install --include-deps -r /home/pentester/tools/jwt_tool/requirements.txt 2>/dev/null || \
+    python3 -m venv /app/.venv && \
+    /app/.venv/bin/pip install --no-cache-dir -r /home/pentester/tools/jwt_tool/requirements.txt && \
     ln -s /home/pentester/tools/jwt_tool/jwt_tool.py /home/pentester/.local/bin/jwt_tool
-
-COPY strix/__init__.py strix/
-COPY strix/config/ /app/strix/config/
-COPY strix/utils/ /app/strix/utils/
-COPY strix/telemetry/ /app/strix/telemetry/
-COPY strix/runtime/tool_server.py strix/runtime/__init__.py strix/runtime/runtime.py /app/strix/runtime/
-COPY strix/tools/ /app/strix/tools/
 
 RUN echo 'export PATH="/home/pentester/go/bin:/home/pentester/.local/bin:/home/pentester/.npm-global/bin:$PATH"' >> /home/pentester/.bashrc && \
     echo 'export PATH="/home/pentester/go/bin:/home/pentester/.local/bin:/home/pentester/.npm-global/bin:$PATH"' >> /home/pentester/.profile

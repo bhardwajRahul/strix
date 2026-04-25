@@ -57,6 +57,7 @@ export https_proxy=http://127.0.0.1:${CAIDO_PORT}
 export HTTP_PROXY=http://127.0.0.1:${CAIDO_PORT}
 export HTTPS_PROXY=http://127.0.0.1:${CAIDO_PORT}
 export ALL_PROXY=http://127.0.0.1:${CAIDO_PORT}
+export NO_PROXY=localhost,127.0.0.1
 export REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
 export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 EOF
@@ -67,6 +68,7 @@ https_proxy=http://127.0.0.1:${CAIDO_PORT}
 HTTP_PROXY=http://127.0.0.1:${CAIDO_PORT}
 HTTPS_PROXY=http://127.0.0.1:${CAIDO_PORT}
 ALL_PROXY=http://127.0.0.1:${CAIDO_PORT}
+NO_PROXY=localhost,127.0.0.1
 EOF
 
 cat << EOF | sudo tee /etc/wgetrc
@@ -87,34 +89,6 @@ sudo -u pentester mkdir -p /home/pentester/.pki/nssdb
 sudo -u pentester certutil -N -d sql:/home/pentester/.pki/nssdb --empty-password
 sudo -u pentester certutil -A -n "Testing Root CA" -t "C,," -i /app/certs/ca.crt -d sql:/home/pentester/.pki/nssdb
 echo "✅ CA added to browser trust store"
-
-echo "Starting tool server..."
-cd /app
-export PYTHONPATH=/app
-export STRIX_SANDBOX_MODE=true
-export TOOL_SERVER_TIMEOUT="${STRIX_SANDBOX_EXECUTION_TIMEOUT:-120}"
-TOOL_SERVER_LOG="/tmp/tool_server.log"
-
-sudo -E -u pentester \
-  /app/.venv/bin/python -m strix.runtime.tool_server \
-  --token="$TOOL_SERVER_TOKEN" \
-  --host=0.0.0.0 \
-  --port="$TOOL_SERVER_PORT" \
-  --timeout="$TOOL_SERVER_TIMEOUT" > "$TOOL_SERVER_LOG" 2>&1 &
-
-for i in {1..10}; do
-  if curl -s "http://127.0.0.1:$TOOL_SERVER_PORT/health" | grep -q '"status":"healthy"'; then
-    echo "✅ Tool server healthy on port $TOOL_SERVER_PORT"
-    break
-  fi
-  if [ $i -eq 10 ]; then
-    echo "ERROR: Tool server failed to become healthy"
-    echo "=== Tool server log ==="
-    cat "$TOOL_SERVER_LOG" 2>/dev/null || echo "(no log)"
-    exit 1
-  fi
-  sleep 1
-done
 
 echo "✅ Container ready"
 
