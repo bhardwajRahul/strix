@@ -40,8 +40,6 @@ dependencies = [
   "textual>=6.0.0",
   "requests>=2.32.0",
   "cvss>=3.2",
-  "traceloop-sdk>=0.53.0",
-  "opentelemetry-exporter-otlp-proto-http>=1.40.0",
   "scrubadub>=2.0.1",
 ]
 
@@ -64,7 +62,6 @@ dev = [
   "mypy>=1.16.0",
   "ruff>=0.11.13",
   "pyright>=1.1.401",
-  "pylint>=3.3.7",
   "bandit>=1.8.3",
   "pre-commit>=4.2.0",
   "pyinstaller>=6.17.0; python_version >= '3.12' and python_version < '3.15'",
@@ -121,9 +118,7 @@ module = [
     "pyte.*",
     "libtmux.*",
     "cvss.*",
-    "opentelemetry.*",
     "scrubadub.*",
-    "traceloop.*",
     "docker.*",
 ]
 ignore_missing_imports = true

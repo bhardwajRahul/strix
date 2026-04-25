@@ -8,7 +8,7 @@ help:
 	@echo ""
 	@echo "Code Quality:"
 	@echo "  format        - Format code with ruff"
-	@echo "  lint          - Lint code with ruff and pylint"
+	@echo "  lint          - Lint code with ruff"
 	@echo "  type-check    - Run type checking with mypy and pyright"
 	@echo "  security      - Run security checks with bandit"
 	@echo "  check-all     - Run all code quality checks"
@@ -36,8 +36,6 @@ format:
 lint:
 	@echo "🔍 Linting code with ruff..."
 	uv run ruff check . --fix
-	@echo "📝 Running additional linting with pylint..."
-	uv run pylint strix/ --score=no --reports=no
 	@echo "✅ Linting complete!"
 
 type-check:

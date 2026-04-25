@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 from agents import Runner
+from agents.memory import SQLiteSession
 from agents.tracing import add_trace_processor
 
 from strix.agents.factory import build_strix_agent, make_child_factory
@@ -276,10 +277,22 @@ async def run_strix_scan(
             reasoning_effort=reasoning_effort,
         )
 
+        # Native SDK session: persists conversation history to
+        # ``strix_runs/<scan_id>/session.db`` so a second invocation
+        # with the same ``scan_id`` resumes from where we left off.
+        session_db = (
+            (tracer.get_run_dir() / "session.db")
+            if tracer is not None and hasattr(tracer, "get_run_dir")
+            else Path.cwd() / "strix_runs" / scan_id / "session.db"
+        )
+        session_db.parent.mkdir(parents=True, exist_ok=True)
+        session = SQLiteSession(session_id=scan_id, db_path=session_db)
+
         task_text = _build_root_task(scan_config)
         return await Runner.run(
             root_agent,
             input=task_text,
+            session=session,
             run_config=run_config,
             context=context,
             hooks=StrixOrchestrationHooks(),

@@ -9,10 +9,8 @@ def _is_enabled(raw_value: str | None, default: str = "1") -> bool:
     return value not in _DISABLED_VALUES
 
 
-def is_otel_enabled() -> bool:
-    explicit = Config.get("strix_otel_telemetry")
-    if explicit is not None:
-        return _is_enabled(explicit)
+def is_telemetry_enabled() -> bool:
+    """Master gate — controls JSONL event emission and posthog."""
     return _is_enabled(Config.get("strix_telemetry"), default="1")
 
 
@@ -20,4 +18,4 @@ def is_posthog_enabled() -> bool:
     explicit = Config.get("strix_posthog_telemetry")
     if explicit is not None:
         return _is_enabled(explicit)
-    return _is_enabled(Config.get("strix_telemetry"), default="1")
+    return is_telemetry_enabled()

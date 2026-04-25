@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
 from typing import Any
 
 from agents.items import ModelResponse
@@ -105,10 +106,16 @@ class StrixOrchestrationHooks(RunHooks[Any]):
         context: AgentHookContext[Any],
         agent: Any,
     ) -> None:
-        # The CaidoCapability is bound to the sandbox session, not the
-        # Agent (we use plain ``Agent``, not ``SandboxAgent``). We stash
-        # it in the context dict at scan-bring-up time so the hook can
-        # await its healthcheck before the first LLM call.
+        # Two concerns wired together because they fire at the same
+        # moment in the lifecycle:
+        #
+        # 1. CaidoCapability is bound to the sandbox session, not the
+        #    Agent (we use plain ``Agent``, not ``SandboxAgent``), so
+        #    the healthcheck task gets stashed in the context dict at
+        #    scan bring-up and we await it on first agent start.
+        # 2. The TUI reads ``tracer.agents`` to render the agent tree.
+        #    We mirror the bus state into the tracer here so the tree
+        #    actually shows live and historical agents.
         del agent
         try:
             ctx = context.context
@@ -118,6 +125,24 @@ class StrixOrchestrationHooks(RunHooks[Any]):
             task = getattr(cap, "_healthcheck_task", None)
             if task is not None:
                 await task
+
+            tracer = ctx.get("tracer")
+            bus = ctx.get("bus")
+            me = ctx.get("agent_id")
+            if tracer is None or bus is None or me is None:
+                return
+            now = datetime.now(UTC).isoformat()
+            tracer.agents.setdefault(
+                me,
+                {
+                    "id": me,
+                    "name": bus.names.get(me, me),
+                    "parent_id": bus.parent_of.get(me),
+                    "status": bus.statuses.get(me, "running"),
+                    "created_at": now,
+                    "updated_at": now,
+                },
+            )
         except Exception:
             logger.exception("on_agent_start failed")
 
@@ -136,6 +161,12 @@ class StrixOrchestrationHooks(RunHooks[Any]):
             if bus is None or me is None:
                 return
             crashed = (output is None) or not ctx.get("agent_finish_called", False)
+            final_status = "crashed" if crashed else "completed"
+
+            tracer = ctx.get("tracer")
+            if tracer is not None and me in tracer.agents:
+                tracer.agents[me]["status"] = final_status
+                tracer.agents[me]["updated_at"] = datetime.now(UTC).isoformat()
             parent = bus.parent_of.get(me)
             if crashed and parent is not None:
                 await bus.send(
@@ -150,7 +181,7 @@ class StrixOrchestrationHooks(RunHooks[Any]):
                         "type": "crash",
                     },
                 )
-            await bus.finalize(me, "crashed" if crashed else "completed")
+            await bus.finalize(me, final_status)
         except Exception:
             logger.exception("on_agent_end failed")
 

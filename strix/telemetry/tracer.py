@@ -1,41 +1,18 @@
-import json
 import logging
-import threading
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Optional
 from uuid import uuid4
 
-from opentelemetry import trace
-from opentelemetry.trace import SpanContext, SpanKind
-
-from strix.config import Config
 from strix.telemetry import posthog
-from strix.telemetry.flags import is_otel_enabled
-from strix.telemetry.utils import (
-    TelemetrySanitizer,
-    append_jsonl_record,
-    bootstrap_otel,
-    format_span_id,
-    format_trace_id,
-    get_events_write_lock,
-)
-
-
-try:
-    from traceloop.sdk import Traceloop
-except ImportError:  # pragma: no cover - exercised when dependency is absent
-    Traceloop = None  # type: ignore[assignment,unused-ignore]
+from strix.telemetry.flags import is_telemetry_enabled
+from strix.telemetry.utils import TelemetrySanitizer, append_jsonl_record
 
 
 logger = logging.getLogger(__name__)
 
 _global_tracer: Optional["Tracer"] = None
-
-_OTEL_BOOTSTRAP_LOCK = threading.Lock()
-_OTEL_BOOTSTRAPPED = False
-_OTEL_REMOTE_ENABLED = False
 
 
 def get_global_tracer() -> Optional["Tracer"]:
@@ -86,16 +63,12 @@ class Tracer:
         self._next_message_id = 1
         self._saved_vuln_ids: set[str] = set()
         self._run_completed_emitted = False
-        self._telemetry_enabled = is_otel_enabled()
+        self._telemetry_enabled = is_telemetry_enabled()
         self._sanitizer = TelemetrySanitizer()
-
-        self._otel_tracer: Any = None
-        self._remote_export_enabled = False
 
         self.caido_url: str | None = None
         self.vulnerability_found_callback: Callable[[dict[str, Any]], None] | None = None
 
-        self._setup_telemetry()
         self._emit_run_started_event()
 
     @property
@@ -103,65 +76,6 @@ class Tracer:
         if self._events_file_path is None:
             self._events_file_path = self.get_run_dir() / "events.jsonl"
         return self._events_file_path
-
-    def _active_events_file_path(self) -> Path:
-        active = get_global_tracer()
-        if active and active._events_file_path is not None:
-            return active._events_file_path
-        return self.events_file_path
-
-    def _get_events_write_lock(self, output_path: Path | None = None) -> threading.Lock:
-        path = output_path or self.events_file_path
-        return get_events_write_lock(path)
-
-    def _active_run_metadata(self) -> dict[str, Any]:
-        active = get_global_tracer()
-        if active:
-            return active.run_metadata
-        return self.run_metadata
-
-    def _setup_telemetry(self) -> None:
-        global _OTEL_BOOTSTRAPPED, _OTEL_REMOTE_ENABLED
-
-        if not self._telemetry_enabled:
-            self._otel_tracer = None
-            self._remote_export_enabled = False
-            return
-
-        run_dir = self.get_run_dir()
-        self._events_file_path = run_dir / "events.jsonl"
-        base_url = (Config.get("traceloop_base_url") or "").strip()
-        api_key = (Config.get("traceloop_api_key") or "").strip()
-        headers_raw = Config.get("traceloop_headers") or ""
-
-        (
-            self._otel_tracer,
-            self._remote_export_enabled,
-            _OTEL_BOOTSTRAPPED,
-            _OTEL_REMOTE_ENABLED,
-        ) = bootstrap_otel(
-            bootstrapped=_OTEL_BOOTSTRAPPED,
-            remote_enabled_state=_OTEL_REMOTE_ENABLED,
-            bootstrap_lock=_OTEL_BOOTSTRAP_LOCK,
-            traceloop=Traceloop,
-            base_url=base_url,
-            api_key=api_key,
-            headers_raw=headers_raw,
-            output_path_getter=self._active_events_file_path,
-            run_metadata_getter=self._active_run_metadata,
-            sanitizer=self._sanitize_data,
-            write_lock_getter=self._get_events_write_lock,
-            tracer_name="strix.telemetry.tracer",
-        )
-
-    def _set_association_properties(self, properties: dict[str, Any]) -> None:
-        if Traceloop is None:
-            return
-        sanitized = self._sanitize_data(properties)
-        try:
-            Traceloop.set_association_properties(sanitized)
-        except Exception:  # noqa: BLE001
-            logger.debug("Failed to set Traceloop association properties")
 
     def _sanitize_data(self, data: Any, key_hint: str | None = None) -> Any:
         return self._sanitizer.sanitize(data, key_hint=key_hint)
@@ -209,61 +123,12 @@ class Tracer:
         sanitized_payload = self._sanitize_data(payload) if payload is not None else None
         sanitized_error = self._sanitize_data(error) if error is not None else None
 
-        trace_id: str | None = None
-        span_id: str | None = None
-        parent_span_id: str | None = None
-
-        current_context = trace.get_current_span().get_span_context()
-        if isinstance(current_context, SpanContext) and current_context.is_valid:
-            parent_span_id = format_span_id(current_context.span_id)
-
-        if self._otel_tracer is not None:
-            try:
-                with self._otel_tracer.start_as_current_span(
-                    f"strix.{event_type}",
-                    kind=SpanKind.INTERNAL,
-                ) as span:
-                    span_context = span.get_span_context()
-                    trace_id = format_trace_id(span_context.trace_id)
-                    span_id = format_span_id(span_context.span_id)
-
-                    span.set_attribute("strix.event_type", event_type)
-                    span.set_attribute("strix.source", source)
-                    span.set_attribute("strix.run_id", self.run_id)
-                    span.set_attribute("strix.run_name", self.run_name or "")
-
-                    if status:
-                        span.set_attribute("strix.status", status)
-                    if sanitized_actor is not None:
-                        span.set_attribute(
-                            "strix.actor",
-                            json.dumps(sanitized_actor, ensure_ascii=False),
-                        )
-                    if sanitized_payload is not None:
-                        span.set_attribute(
-                            "strix.payload",
-                            json.dumps(sanitized_payload, ensure_ascii=False),
-                        )
-                    if sanitized_error is not None:
-                        span.set_attribute(
-                            "strix.error",
-                            json.dumps(sanitized_error, ensure_ascii=False),
-                        )
-            except Exception:  # noqa: BLE001
-                logger.debug("Failed to create OTEL span for event type '%s'", event_type)
-
-        if trace_id is None:
-            trace_id = format_trace_id(uuid4().int & ((1 << 128) - 1)) or uuid4().hex
-        if span_id is None:
-            span_id = format_span_id(uuid4().int & ((1 << 64) - 1)) or uuid4().hex[:16]
-
         record = {
             "timestamp": datetime.now(UTC).isoformat(),
             "event_type": event_type,
             "run_id": self.run_id,
-            "trace_id": trace_id,
-            "span_id": span_id,
-            "parent_span_id": parent_span_id,
+            "trace_id": uuid4().hex,
+            "span_id": uuid4().hex[:16],
             "actor": sanitized_actor,
             "payload": sanitized_payload,
             "status": status,
@@ -282,7 +147,6 @@ class Tracer:
         self._run_dir = None
         self._events_file_path = None
         self._run_completed_emitted = False
-        self._set_association_properties({"run_id": self.run_id, "run_name": self.run_name or ""})
         self._emit_run_started_event()
 
     def _emit_run_started_event(self) -> None:
@@ -295,7 +159,6 @@ class Tracer:
                 "run_name": self.run_name,
                 "start_time": self.start_time,
                 "local_jsonl_path": str(self.events_file_path),
-                "remote_export_enabled": self._remote_export_enabled,
             },
             status="running",
             include_run_metadata=True,
@@ -469,14 +332,6 @@ class Tracer:
             {
                 "targets": config.get("targets", []),
                 "user_instructions": config.get("user_instructions", ""),
-                "max_iterations": config.get("max_iterations", 200),
-            }
-        )
-        self._set_association_properties(
-            {
-                "run_id": self.run_id,
-                "run_name": self.run_name or "",
-                "targets": config.get("targets", []),
                 "max_iterations": config.get("max_iterations", 200),
             }
         )
