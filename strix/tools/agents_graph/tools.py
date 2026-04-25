@@ -403,7 +403,6 @@ async def create_agent(
         bus=bus,
         sandbox_session=inner.get("sandbox_session"),
         sandbox_client=inner.get("sandbox_client"),
-        caido_host_port=inner.get("caido_host_port"),
         caido_client=inner.get("caido_client"),
         agent_id=child_id,
         parent_id=parent_id,

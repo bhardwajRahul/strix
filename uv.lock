@@ -2038,7 +2038,6 @@ name = "strix-agent"
 version = "0.8.3"
 source = { editable = "." }
 dependencies = [
-    { name = "aiohttp" },
     { name = "caido-sdk-client" },
     { name = "cvss" },
     { name = "docker" },
@@ -2061,7 +2060,6 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "aiohttp", specifier = ">=3.10.0" },
     { name = "caido-sdk-client", specifier = ">=0.2.0" },
     { name = "cvss", specifier = ">=3.2" },
     { name = "docker", specifier = ">=7.1.0" },

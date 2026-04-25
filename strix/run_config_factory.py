@@ -67,7 +67,7 @@ def make_run_config(
     Args:
         sandbox_session: Live sandbox session shared by every agent in
             this scan (one container per scan; see
-            :mod:`strix.sandbox.session_manager`). ``None`` is allowed
+            :mod:`strix.runtime.session_manager`). ``None`` is allowed
             for unit tests and dry runs.
         model: Model alias passed to ``MultiProvider``. Defaults to the
             production Anthropic alias.
@@ -112,7 +112,6 @@ def make_agent_context(
     *,
     bus: AgentMessageBus,
     sandbox_session: BaseSandboxSession | None,
-    caido_host_port: int | None,
     agent_id: str,
     parent_id: str | None,
     tracer: Any | None,
@@ -141,7 +140,6 @@ def make_agent_context(
         "bus": bus,
         "sandbox_session": sandbox_session,
         "sandbox_client": sandbox_client,
-        "caido_host_port": caido_host_port,
         "caido_client": caido_client,
         "agent_id": agent_id,
         "parent_id": parent_id,

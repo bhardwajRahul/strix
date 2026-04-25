@@ -37,7 +37,7 @@ from strix.interface.tool_components.agent_message_renderer import AgentMessageR
 from strix.interface.tool_components.registry import get_tool_renderer
 from strix.interface.tool_components.user_message_renderer import UserMessageRenderer
 from strix.interface.utils import build_tui_stats_text
-from strix.sandbox import session_manager
+from strix.runtime import session_manager
 from strix.telemetry.tracer import Tracer, set_global_tracer
 
 

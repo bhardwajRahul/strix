@@ -15,7 +15,7 @@ from rich.text import Text
 
 from strix.config import Config
 from strix.entry import run_strix_scan
-from strix.sandbox import session_manager
+from strix.runtime import session_manager
 from strix.telemetry.tracer import Tracer, set_global_tracer
 
 from .utils import (

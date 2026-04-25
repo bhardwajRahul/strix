@@ -2,7 +2,7 @@
 
 1. Build the per-scan ``AgentMessageBus``.
 2. Bring up (or reuse) a sandbox session for ``scan_id`` via the
-   :mod:`strix.sandbox.session_manager`.
+   :mod:`strix.runtime.session_manager`.
 3. Build the root ``Agent`` via :func:`build_strix_agent` and a
    matching child factory via :func:`make_child_factory`.
 4. Build the root context dict (bus + sandbox bundle + agent_factory).
@@ -32,9 +32,7 @@ from strix.run_config_factory import (
     make_agent_context,
     make_run_config,
 )
-from strix.sandbox import session_manager
-from strix.sandbox.caido_bootstrap import bootstrap_caido_client
-from strix.sandbox.healthcheck import wait_for_tcp_ready
+from strix.runtime import session_manager
 
 
 if TYPE_CHECKING:
@@ -207,16 +205,6 @@ async def run_strix_scan(
         sources_path=sources_path,
     )
 
-    # Wait for the Caido sidecar to come up before any agent fires its
-    # first request, then bootstrap the host-side Caido client.
-    await wait_for_tcp_ready(
-        "127.0.0.1",
-        int(bundle["caido_host_port"]),
-        timeout=60.0,
-    )
-    caido_client = await bootstrap_caido_client(int(bundle["caido_host_port"]))
-    bundle["caido_client"] = caido_client
-
     try:
         scan_mode = str(scan_config.get("scan_mode") or "deep")
         is_whitebox = bool(scan_config.get("is_whitebox", False))
@@ -249,8 +237,7 @@ async def run_strix_scan(
             bus=bus,
             sandbox_session=bundle["session"],
             sandbox_client=bundle["client"],
-            caido_host_port=bundle["caido_host_port"],
-            caido_client=caido_client,
+            caido_client=bundle["caido_client"],
             agent_id=root_id,
             parent_id=None,
             tracer=tracer,

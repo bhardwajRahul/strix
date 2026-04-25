@@ -1,8 +1,10 @@
-"""Strix runtime package.
+"""Strix runtime — Docker-backed sandbox lifecycle on top of the Agents SDK.
 
 - :class:`strix.runtime.strix_docker_client.StrixDockerSandboxClient` —
-  host-side ``DockerSandboxClient`` subclass that injects
-  ``NET_ADMIN`` / ``NET_RAW`` capabilities and ``host.docker.internal``
-  extra-hosts, used by the per-scan session manager
-  (:mod:`strix.sandbox.session_manager`).
+  ``DockerSandboxClient`` subclass that injects ``NET_ADMIN`` /
+  ``NET_RAW`` capabilities and ``host.docker.internal`` extra-hosts.
+- :mod:`.session_manager` — ``create_or_reuse`` / ``cleanup`` keyed
+  by scan id; bundles the SDK session with a ready Caido client.
+- :mod:`.caido_bootstrap` — runtime-agnostic Caido auth dance via
+  ``session.exec``.
 """

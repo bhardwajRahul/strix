@@ -2,9 +2,9 @@
 
 One session per scan, reused across every agent in that scan's tree.
 
-The bundle returned by :func:`create_or_reuse` is what the per-agent
-context dict reads from in ``run_config_factory.make_agent_context`` —
-``client``, ``session``, and ``caido_host_port``.
+The bundle returned by :func:`create_or_reuse` carries the SDK
+``client`` + ``session`` plus a ready-to-use Caido client (already
+authenticated and pointing at a temporary sandbox project).
 
 Cache strategy: a module-level dict keyed by ``scan_id``. The same scan
 issuing multiple ``create_or_reuse`` calls (e.g., resume after a crash
@@ -23,6 +23,7 @@ from agents.sandbox.entries import LocalDir
 from agents.sandbox.manifest import Environment, Manifest
 from agents.sandbox.sandboxes.docker import DockerSandboxClientOptions
 
+from strix.runtime.caido_bootstrap import bootstrap_caido
 from strix.runtime.strix_docker_client import StrixDockerSandboxClient
 
 
@@ -59,7 +60,7 @@ async def create_or_reuse(
             ``/workspace/sources`` so the agent can read user code.
 
     Returns the bundle dict containing ``client``, ``session``, and
-    ``caido_host_port``.
+    ``caido_client``.
     """
     cached = _SESSION_CACHE.get(scan_id)
     if cached is not None:
@@ -67,18 +68,18 @@ async def create_or_reuse(
         return cached
 
     # Caido runs as an in-container sidecar; HTTP(S) traffic from any
-    # process started via ``docker exec`` (the SDK's Shell tool, etc.)
+    # process started via ``session.exec`` (the SDK's Shell tool, etc.)
     # picks up these env vars automatically.
-    caido_proxy_url = f"http://127.0.0.1:{_CONTAINER_CAIDO_PORT}"
+    container_caido_url = f"http://127.0.0.1:{_CONTAINER_CAIDO_PORT}"
     manifest = Manifest(
         entries={"sources": LocalDir(src=sources_path)},
         environment=Environment(
             value={
                 "PYTHONUNBUFFERED": "1",
                 "HOST_GATEWAY": "host.docker.internal",
-                "http_proxy": caido_proxy_url,
-                "https_proxy": caido_proxy_url,
-                "ALL_PROXY": caido_proxy_url,
+                "http_proxy": container_caido_url,
+                "https_proxy": container_caido_url,
+                "ALL_PROXY": container_caido_url,
             },
         ),
     )
@@ -92,12 +93,19 @@ async def create_or_reuse(
     logger.info("Creating sandbox session for scan %s (image=%s)", scan_id, image)
     session = await client.create(options=options, manifest=manifest)
 
-    caido_endpoint = await session._resolve_exposed_port(_CONTAINER_CAIDO_PORT)
+    caido_endpoint = await session.resolve_exposed_port(_CONTAINER_CAIDO_PORT)
+    host_caido_url = f"http://{caido_endpoint.host}:{caido_endpoint.port}"
+
+    caido_client = await bootstrap_caido(
+        session,
+        host_url=host_caido_url,
+        container_url=container_caido_url,
+    )
 
     bundle = {
         "client": client,
         "session": session,
-        "caido_host_port": caido_endpoint.port,
+        "caido_client": caido_client,
     }
     _SESSION_CACHE[scan_id] = bundle
     return bundle
