@@ -42,6 +42,10 @@ def _dump(result: dict[str, Any]) -> str:
     return json.dumps(result, ensure_ascii=False, default=str)
 
 
+def _ctx(ctx: RunContextWrapper) -> dict[str, Any]:
+    return ctx.context if isinstance(ctx.context, dict) else {}
+
+
 @strix_tool(timeout=30)
 async def view_agent_graph(ctx: RunContextWrapper) -> str:
     """Print the multi-agent tree — every agent, its parent, its status.
@@ -53,7 +57,7 @@ async def view_agent_graph(ctx: RunContextWrapper) -> str:
     bullet list with status in brackets; the agent that called this tool
     is marked ``← you``.
     """
-    inner = ctx.context if isinstance(ctx.context, dict) else {}
+    inner = _ctx(ctx)
     bus = inner.get("bus")
     me = inner.get("agent_id")
     if bus is None:
@@ -108,7 +112,7 @@ async def agent_status(ctx: RunContextWrapper, agent_id: str) -> str:
         agent_id: The 8-char id from ``view_agent_graph`` /
             ``create_agent``.
     """
-    inner = ctx.context if isinstance(ctx.context, dict) else {}
+    inner = _ctx(ctx)
     bus = inner.get("bus")
     if bus is None:
         return _dump({"success": False, "error": "Bus not initialized in context."})
@@ -165,7 +169,7 @@ async def send_message_to_agent(
             expected). Default ``information``.
         priority: ``low`` / ``normal`` / ``high`` / ``urgent``.
     """
-    inner = ctx.context if isinstance(ctx.context, dict) else {}
+    inner = _ctx(ctx)
     bus = inner.get("bus")
     me = inner.get("agent_id")
     if bus is None or me is None:
@@ -247,7 +251,7 @@ async def wait_for_message(
             returns and you decide whether to keep working or wait
             again.
     """
-    inner = ctx.context if isinstance(ctx.context, dict) else {}
+    inner = _ctx(ctx)
     bus = inner.get("bus")
     me = inner.get("agent_id")
     if bus is None or me is None:
@@ -338,7 +342,7 @@ async def create_agent(
             when starting a clean-slate task.
         skills: Comma-separated skill names. Max 5; prefer 1-3.
     """
-    inner = ctx.context if isinstance(ctx.context, dict) else {}
+    inner = _ctx(ctx)
     bus = inner.get("bus")
     parent_id = inner.get("agent_id")
     factory: Callable[..., SDKAgent] | None = inner.get("agent_factory")
@@ -408,7 +412,6 @@ async def create_agent(
         caido_host_port=inner.get("caido_host_port"),
         caido_capability=inner.get("caido_capability"),
         agent_id=child_id,
-        agent_name=name,
         parent_id=parent_id,
         tracer=inner.get("tracer"),
         model=inner.get("model", "anthropic/claude-sonnet-4-6"),
@@ -495,7 +498,7 @@ async def agent_finish(
             parent (e.g., "prioritize testing X", "spawn an agent to
             cover Y").
     """
-    inner = ctx.context if isinstance(ctx.context, dict) else {}
+    inner = _ctx(ctx)
     bus = inner.get("bus")
     me = inner.get("agent_id")
     if bus is None or me is None:

@@ -107,7 +107,6 @@ def test_max_turns_default_is_300() -> None:
         tool_server_host_port=None,
         caido_host_port=None,
         agent_id="root",
-        agent_name="root",
         parent_id=None,
         tracer=None,
     )
@@ -124,7 +123,6 @@ def test_make_agent_context_full_shape() -> None:
         tool_server_host_port=48081,
         caido_host_port=48080,
         agent_id="agent-1",
-        agent_name="root",
         parent_id=None,
         tracer="not-a-real-tracer",
         is_whitebox=True,
@@ -154,7 +152,6 @@ def test_make_agent_context_is_whitebox_defaults_false() -> None:
         tool_server_host_port=None,
         caido_host_port=None,
         agent_id="r",
-        agent_name="root",
         parent_id=None,
         tracer=None,
     )

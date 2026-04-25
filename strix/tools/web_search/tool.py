@@ -121,6 +121,5 @@ async def web_search(ctx: RunContextWrapper, query: str) -> str:
             target tech, and the specific question. Treat it like a
             ticket title for a senior security engineer.
     """
-    del ctx
     result = await asyncio.to_thread(_do_search, query)
     return json.dumps(result, ensure_ascii=False, default=str)

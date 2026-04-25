@@ -246,7 +246,7 @@ def _create_note_impl(  # noqa: PLR0911
     category: str = "general",
     tags: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Create one note. Public — used by ``append_note_content`` and tests."""
+    """Create one note. Public — used by tests."""
     with _notes_lock:
         try:
             _ensure_notes_loaded()
@@ -398,22 +398,6 @@ def _delete_note_impl(note_id: str) -> dict[str, Any]:
             }
 
 
-def append_note_content(note_id: str, delta: str) -> dict[str, Any]:
-    """Append text to an existing note's content. Used by the agents-graph
-    wiki-update hook on agent_finish."""
-    with _notes_lock:
-        try:
-            _ensure_notes_loaded()
-            if note_id not in _notes_storage:
-                return {"success": False, "error": f"Note with ID '{note_id}' not found"}
-            note = _notes_storage[note_id]
-            existing = str(note.get("content") or "")
-            updated = f"{existing.rstrip()}{delta}"
-            return _update_note_impl(note_id=note_id, content=updated)
-        except (ValueError, TypeError) as e:
-            return {"success": False, "error": f"Failed to append note content: {e}"}
-
-
 # --- public tools ---------------------------------------------------------
 
 
@@ -457,7 +441,6 @@ async def create_note(
         category: One of the categories above. Default ``"general"``.
         tags: Optional free-form tags.
     """
-    del ctx
     return _dump(
         await asyncio.to_thread(_create_note_impl, title, content, category, tags),
     )
@@ -489,7 +472,6 @@ async def list_notes(
         include_content: When False (default) entries have a preview;
             when True the full ``content`` is included.
     """
-    del ctx
     return _dump(
         await asyncio.to_thread(
             _list_notes_impl,
@@ -508,7 +490,6 @@ async def get_note(ctx: RunContextWrapper, note_id: str) -> str:
     Args:
         note_id: Note id from ``create_note`` or a ``list_notes`` entry.
     """
-    del ctx
     return _dump(await asyncio.to_thread(_get_note_impl, note_id))
 
 
@@ -532,7 +513,6 @@ async def update_note(
         content: New content, or ``None`` to keep.
         tags: New tags list, or ``None`` to keep.
     """
-    del ctx
     return _dump(
         await asyncio.to_thread(
             _update_note_impl,
@@ -551,5 +531,4 @@ async def delete_note(ctx: RunContextWrapper, note_id: str) -> str:
     Args:
         note_id: Note id to delete.
     """
-    del ctx
     return _dump(await asyncio.to_thread(_delete_note_impl, note_id))

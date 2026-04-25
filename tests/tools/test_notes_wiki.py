@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from strix.telemetry.tracer import Tracer, get_global_tracer, set_global_tracer
 from strix.tools.notes import tools as notes_actions
 
@@ -9,7 +11,9 @@ def _reset_notes_state() -> None:
     notes_actions._loaded_notes_run_dir = None
 
 
-def test_wiki_notes_are_persisted_and_removed(tmp_path: Path, monkeypatch) -> None:
+def test_wiki_notes_are_persisted_and_removed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.chdir(tmp_path)
     _reset_notes_state()
 
@@ -48,10 +52,12 @@ def test_wiki_notes_are_persisted_and_removed(tmp_path: Path, monkeypatch) -> No
         assert wiki_path.exists() is False
     finally:
         _reset_notes_state()
-        set_global_tracer(previous_tracer)  # type: ignore[arg-type]
+        set_global_tracer(previous_tracer)
 
 
-def test_notes_jsonl_replay_survives_memory_reset(tmp_path: Path, monkeypatch) -> None:
+def test_notes_jsonl_replay_survives_memory_reset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.chdir(tmp_path)
     _reset_notes_state()
 
@@ -108,10 +114,10 @@ def test_notes_jsonl_replay_survives_memory_reset(tmp_path: Path, monkeypatch) -
         assert listed_after_delete["total_count"] == 0
     finally:
         _reset_notes_state()
-        set_global_tracer(previous_tracer)  # type: ignore[arg-type]
+        set_global_tracer(previous_tracer)
 
 
-def test_get_note_returns_full_note(tmp_path: Path, monkeypatch) -> None:
+def test_get_note_returns_full_note(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
     _reset_notes_state()
 
@@ -136,44 +142,11 @@ def test_get_note_returns_full_note(tmp_path: Path, monkeypatch) -> None:
         assert result["note"]["content"] == "entrypoints and sinks"
     finally:
         _reset_notes_state()
-        set_global_tracer(previous_tracer)  # type: ignore[arg-type]
-
-
-def test_append_note_content_appends_delta(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.chdir(tmp_path)
-    _reset_notes_state()
-
-    previous_tracer = get_global_tracer()
-    tracer = Tracer("append-note-run")
-    set_global_tracer(tracer)
-
-    try:
-        created = notes_actions._create_note_impl(
-            title="Repo wiki",
-            content="base",
-            category="wiki",
-            tags=["repo:demo"],
-        )
-        assert created["success"] is True
-        note_id = created["note_id"]
-        assert isinstance(note_id, str)
-
-        appended = notes_actions.append_note_content(
-            note_id=note_id,
-            delta="\n\n## Agent Update: worker\nSummary: done",
-        )
-        assert appended["success"] is True
-
-        loaded = notes_actions._get_note_impl(note_id=note_id)
-        assert loaded["success"] is True
-        assert loaded["note"]["content"] == "base\n\n## Agent Update: worker\nSummary: done"
-    finally:
-        _reset_notes_state()
-        set_global_tracer(previous_tracer)  # type: ignore[arg-type]
+        set_global_tracer(previous_tracer)
 
 
 def test_list_and_get_note_handle_wiki_repersist_oserror_gracefully(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
     _reset_notes_state()
@@ -195,7 +168,7 @@ def test_list_and_get_note_handle_wiki_repersist_oserror_gracefully(
 
         _reset_notes_state()
 
-        def _raise_oserror(*_args, **_kwargs) -> None:
+        def _raise_oserror(*_args: object, **_kwargs: object) -> None:
             raise OSError("disk full")
 
         monkeypatch.setattr(notes_actions, "_persist_wiki_note", _raise_oserror)
@@ -211,4 +184,4 @@ def test_list_and_get_note_handle_wiki_repersist_oserror_gracefully(
         assert fetched["note"]["content"] == "initial wiki content"
     finally:
         _reset_notes_state()
-        set_global_tracer(previous_tracer)  # type: ignore[arg-type]
+        set_global_tracer(previous_tracer)

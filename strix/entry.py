@@ -18,12 +18,13 @@ from __future__ import annotations
 import logging
 import uuid
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from agents import Runner
 from agents.tracing import add_trace_processor
 
 from strix.agents.factory import build_strix_agent, make_child_factory
+from strix.config.config import Config
 from strix.orchestration.bus import AgentMessageBus
 from strix.orchestration.hooks import StrixOrchestrationHooks
 from strix.run_config_factory import (
@@ -254,7 +255,6 @@ async def run_strix_scan(
             caido_host_port=bundle["caido_host_port"],
             caido_capability=bundle.get("capability"),
             agent_id=root_id,
-            agent_name="strix",
             parent_id=None,
             tracer=tracer,
             model=model,
@@ -265,10 +265,15 @@ async def run_strix_scan(
             agent_factory=agent_factory,
         )
 
+        reasoning = Config.get("strix_reasoning_effort")
+        reasoning_effort: Literal["low", "medium", "high"] | None = (
+            reasoning if reasoning in ("low", "medium", "high") else None  # type: ignore[assignment]
+        )
         run_config = make_run_config(
             sandbox_session=bundle["session"],
             sandbox_client=bundle["client"],
             model=model,
+            reasoning_effort=reasoning_effort,
         )
 
         task_text = _build_root_task(scan_config)

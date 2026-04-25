@@ -61,24 +61,13 @@ class Tracer:
         self.vulnerability_reports: list[dict[str, Any]] = []
         self.final_scan_result: str | None = None
 
-        # LLM usage roll-up. Two buckets: ``live`` (active agents) and
-        # ``completed`` (finalized agents — moved here on on_agent_end).
-        # The orchestration hook chain feeds both via ``record_llm_usage``.
-        self._llm_stats: dict[str, dict[str, Any]] = {
-            "live": {
-                "input_tokens": 0,
-                "output_tokens": 0,
-                "cached_tokens": 0,
-                "cost": 0.0,
-                "requests": 0,
-            },
-            "completed": {
-                "input_tokens": 0,
-                "output_tokens": 0,
-                "cached_tokens": 0,
-                "cost": 0.0,
-                "requests": 0,
-            },
+        # LLM usage roll-up across all agents in this run.
+        self._llm_stats: dict[str, Any] = {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cached_tokens": 0,
+            "cost": 0.0,
+            "requests": 0,
         }
 
         self.scan_results: dict[str, Any] | None = None
@@ -679,65 +668,35 @@ class Tracer:
         )
 
     def get_total_llm_stats(self) -> dict[str, Any]:
-        """Aggregate LLM stats across the live + completed agents.
-
-        Reads ``self._llm_stats`` which the orchestration hooks update
-        per turn via :meth:`record_llm_usage`. The legacy reach-into-
-        ``agents_graph_actions`` globals is gone.
-        """
-        completed = self._llm_stats.get("completed", {}) or {}
-        live = self._llm_stats.get("live", {}) or {}
-
-        total_stats = {
-            "input_tokens": int(completed.get("input_tokens", 0))
-            + int(live.get("input_tokens", 0)),
-            "output_tokens": int(completed.get("output_tokens", 0))
-            + int(live.get("output_tokens", 0)),
-            "cached_tokens": int(completed.get("cached_tokens", 0))
-            + int(live.get("cached_tokens", 0)),
-            "cost": round(
-                float(completed.get("cost", 0.0)) + float(live.get("cost", 0.0)),
-                4,
-            ),
-            "requests": int(completed.get("requests", 0)) + int(live.get("requests", 0)),
+        """Snapshot the run's aggregated LLM usage."""
+        stats = self._llm_stats
+        total = {
+            "input_tokens": int(stats["input_tokens"]),
+            "output_tokens": int(stats["output_tokens"]),
+            "cached_tokens": int(stats["cached_tokens"]),
+            "cost": round(float(stats["cost"]), 4),
+            "requests": int(stats["requests"]),
         }
         return {
-            "total": total_stats,
-            "total_tokens": total_stats["input_tokens"] + total_stats["output_tokens"],
+            "total": total,
+            "total_tokens": total["input_tokens"] + total["output_tokens"],
         }
 
     def record_llm_usage(
         self,
         *,
-        agent_id: str,  # noqa: ARG002
         input_tokens: int = 0,
         output_tokens: int = 0,
         cached_tokens: int = 0,
         cost: float = 0.0,
         requests: int = 1,
-        bucket: str = "live",
     ) -> None:
-        """Accumulate LLM usage. Called by the orchestration hooks.
-
-        ``bucket`` is ``"live"`` for in-flight agents and ``"completed"``
-        for finalized ones — the SDK's on_agent_end hook moves a child's
-        running totals from live to completed when it terminates.
-        """
-        target = self._llm_stats.setdefault(
-            bucket,
-            {
-                "input_tokens": 0,
-                "output_tokens": 0,
-                "cached_tokens": 0,
-                "cost": 0.0,
-                "requests": 0,
-            },
-        )
-        target["input_tokens"] += input_tokens
-        target["output_tokens"] += output_tokens
-        target["cached_tokens"] += cached_tokens
-        target["cost"] += cost
-        target["requests"] += requests
+        """Accumulate LLM usage from the orchestration hooks."""
+        self._llm_stats["input_tokens"] += input_tokens
+        self._llm_stats["output_tokens"] += output_tokens
+        self._llm_stats["cached_tokens"] += cached_tokens
+        self._llm_stats["cost"] += cost
+        self._llm_stats["requests"] += requests
 
     def cleanup(self) -> None:
         self.save_run_data(mark_complete=True)

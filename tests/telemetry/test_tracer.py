@@ -258,32 +258,26 @@ def test_events_with_agent_id_include_agent_name(
     assert chat_event["actor"]["agent_name"] == "Root Agent"
 
 
-def test_get_total_llm_stats_aggregates_live_and_completed(
+def test_get_total_llm_stats_aggregates_recordings(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.chdir(tmp_path)
     tracer = Tracer("cost-rollup")
     set_global_tracer(tracer)
 
-    # Live agent (still running).
     tracer.record_llm_usage(
-        agent_id="root-agent",
         input_tokens=1_000,
         output_tokens=250,
         cached_tokens=100,
         cost=0.12345,
         requests=2,
-        bucket="live",
     )
-    # Completed agents (finalized — moved by on_agent_end hook).
     tracer.record_llm_usage(
-        agent_id="child-1",
         input_tokens=2_000,
         output_tokens=500,
         cached_tokens=400,
         cost=0.54321,
         requests=3,
-        bucket="completed",
     )
 
     stats = tracer.get_total_llm_stats()

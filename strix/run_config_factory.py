@@ -69,8 +69,6 @@ def make_run_config(
     *,
     sandbox_session: BaseSandboxSession | None,
     model: str = "anthropic/claude-sonnet-4-6",
-    parallel_tool_calls: bool = _PARALLEL_TOOL_CALLS_DEFAULT,
-    tool_choice: Literal["auto", "required", "none"] | None = "required",
     reasoning_effort: Literal["low", "medium", "high"] | None = None,
     model_settings_override: ModelSettings | None = None,
     sandbox_client: Any | None = None,
@@ -88,9 +86,6 @@ def make_run_config(
             for unit tests and dry runs.
         model: Model alias passed to ``MultiProvider``. Defaults to the
             production Anthropic alias.
-        parallel_tool_calls: Default ``False`` — the tool server
-            serializes one task per agent.
-        tool_choice: Forces tool use per turn unless explicitly relaxed.
         reasoning_effort: ``"low" | "medium" | "high"``; routes to
             ``ModelSettings.reasoning``.
         model_settings_override: Optional per-run ``ModelSettings``
@@ -100,8 +95,8 @@ def make_run_config(
             supplied without a client.
     """
     base_settings = ModelSettings(
-        parallel_tool_calls=parallel_tool_calls,
-        tool_choice=tool_choice,
+        parallel_tool_calls=_PARALLEL_TOOL_CALLS_DEFAULT,
+        tool_choice="required",
         retry=ModelRetrySettings(
             max_retries=_DEFAULT_MAX_RETRIES,
             backoff=_DEFAULT_BACKOFF,
@@ -113,8 +108,6 @@ def make_run_config(
             ModelSettings(reasoning=Reasoning(effort=reasoning_effort)),
         )
     if model_settings_override is not None:
-        # ``ModelSettings.resolve`` merges another ModelSettings into self
-        # with override-wins semantics — exactly what we want.
         base_settings = base_settings.resolve(model_settings_override)
 
     sandbox_config = (
@@ -142,7 +135,6 @@ def make_agent_context(
     tool_server_host_port: int | None,
     caido_host_port: int | None,
     agent_id: str,
-    agent_name: str,
     parent_id: str | None,
     tracer: Any | None,
     model: str = "anthropic/claude-sonnet-4-6",
@@ -175,7 +167,6 @@ def make_agent_context(
         "caido_host_port": caido_host_port,
         "caido_capability": caido_capability,
         "agent_id": agent_id,
-        "agent_name": agent_name,
         "parent_id": parent_id,
         "tracer": tracer,
         "model": model,

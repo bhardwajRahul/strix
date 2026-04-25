@@ -21,6 +21,17 @@ from strix.tools._decorator import strix_tool
 VALID_PRIORITIES = ["low", "normal", "high", "critical"]
 VALID_STATUSES = ["pending", "in_progress", "done"]
 
+_PRIORITY_RANK = {"critical": 0, "high": 1, "normal": 2, "low": 3}
+_STATUS_RANK = {"done": 0, "in_progress": 1, "pending": 2}
+
+
+def _todo_sort_key(todo: dict[str, Any]) -> tuple[int, int, str]:
+    return (
+        _STATUS_RANK.get(todo.get("status", "pending"), 99),
+        _PRIORITY_RANK.get(todo.get("priority", "normal"), 99),
+        todo.get("created_at", ""),
+    )
+
 
 # Per-agent silo: ``_todos_storage[agent_id][todo_id] = todo_dict``.
 # Keyed by ``ctx.context['agent_id']`` so two agents in the same scan
@@ -49,22 +60,10 @@ def _normalize_priority(priority: str | None, default: str = "normal") -> str:
 
 
 def _sorted_todos(agent_id: str) -> list[dict[str, Any]]:
-    agent_todos = _get_agent_todos(agent_id)
-    todos_list: list[dict[str, Any]] = []
-    for todo_id, todo in agent_todos.items():
-        entry = todo.copy()
-        entry["todo_id"] = todo_id
-        todos_list.append(entry)
-
-    priority_order = {"critical": 0, "high": 1, "normal": 2, "low": 3}
-    status_order = {"done": 0, "in_progress": 1, "pending": 2}
-    todos_list.sort(
-        key=lambda x: (
-            status_order.get(x.get("status", "pending"), 99),
-            priority_order.get(x.get("priority", "normal"), 99),
-            x.get("created_at", ""),
-        ),
-    )
+    todos_list = [
+        {**todo, "todo_id": todo_id} for todo_id, todo in _get_agent_todos(agent_id).items()
+    ]
+    todos_list.sort(key=_todo_sort_key)
     return todos_list
 
 
@@ -323,15 +322,7 @@ async def list_todos(
             entry["todo_id"] = todo_id
             todos_list.append(entry)
 
-        priority_order = {"critical": 0, "high": 1, "normal": 2, "low": 3}
-        status_order = {"done": 0, "in_progress": 1, "pending": 2}
-        todos_list.sort(
-            key=lambda x: (
-                status_order.get(x.get("status", "pending"), 99),
-                priority_order.get(x.get("priority", "normal"), 99),
-                x.get("created_at", ""),
-            ),
-        )
+        todos_list.sort(key=_todo_sort_key)
 
         summary: dict[str, int] = {"pending": 0, "in_progress": 0, "done": 0}
         for todo in todos_list:

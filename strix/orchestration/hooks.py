@@ -92,13 +92,9 @@ class StrixOrchestrationHooks(RunHooks[Any]):
                 if details is not None:
                     cached = int(getattr(details, "cached_tokens", 0) or 0)
                 tracer.record_llm_usage(
-                    agent_id=str(agent_id or "unknown"),
                     input_tokens=int(getattr(usage, "input_tokens", 0) or 0),
                     output_tokens=int(getattr(usage, "output_tokens", 0) or 0),
                     cached_tokens=cached,
-                    cost=0.0,
-                    requests=1,
-                    bucket="live",
                 )
             ctx["turn_count"] = int(ctx.get("turn_count", 0)) + 1
         except Exception:

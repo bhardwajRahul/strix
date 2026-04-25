@@ -399,7 +399,6 @@ async def create_vulnerability_report(
             ``fix_before`` (verbatim source), ``fix_after`` (suggested
             replacement).
     """
-    del ctx
     result = await asyncio.to_thread(
         _do_create,
         title=title,
