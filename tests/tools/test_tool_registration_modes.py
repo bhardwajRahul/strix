@@ -96,4 +96,7 @@ def test_load_skill_import_does_not_register_create_agent_in_sandbox(
 
     names_after = set(registry.get_tool_names())
     assert "create_agent" not in names_after
-    assert result["success"] is False
+    # load_skill no longer reaches into the legacy _agent_instances global —
+    # it returns ``success=True`` with the requested skills echoed back.
+    assert result["success"] is True
+    assert result["loaded_skills"] == ["nmap"]

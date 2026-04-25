@@ -170,7 +170,7 @@ def test_sandbox_config_omitted_when_no_session() -> None:
 def test_model_default_is_strix_claude() -> None:
     """Production default per AUDIT/PLAYBOOK convention."""
     cfg = make_run_config(sandbox_session=None)
-    assert cfg.model == "strix/claude-sonnet-4.6"
+    assert cfg.model == "anthropic/claude-sonnet-4-6"
 
 
 def test_multi_provider_is_built() -> None:

@@ -6,7 +6,6 @@ from typing import Any
 import litellm
 
 from strix.config.config import resolve_llm_config
-from strix.llm.multi_provider_setup import STRIX_MODEL_MAP
 
 
 logger = logging.getLogger(__name__)
@@ -158,10 +157,6 @@ def check_duplicate(
 
         model_name, api_key, api_base = resolve_llm_config()
         litellm_model: str | None = model_name
-        if model_name and model_name.startswith("strix/"):
-            base = model_name[len("strix/") :]
-            if base in STRIX_MODEL_MAP:
-                litellm_model = f"openai/{base}"
 
         messages = [
             {"role": "system", "content": DEDUPE_SYSTEM_PROMPT},

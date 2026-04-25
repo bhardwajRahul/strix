@@ -361,7 +361,7 @@ async def create_agent(
         agent_name=name,
         parent_id=parent_id,
         tracer=inner.get("tracer"),
-        model=inner.get("model", "strix/claude-sonnet-4.6"),
+        model=inner.get("model", "anthropic/claude-sonnet-4-6"),
         model_settings=inner.get("model_settings"),
         max_turns=int(inner.get("max_turns", 300)),
         is_whitebox=bool(inner.get("is_whitebox", False)),
@@ -373,7 +373,7 @@ async def create_agent(
     child_run_config = make_run_config(
         sandbox_session=inner.get("sandbox_session"),
         sandbox_client=inner.get("sandbox_client"),
-        model=inner.get("model", "strix/claude-sonnet-4.6"),
+        model=inner.get("model", "anthropic/claude-sonnet-4-6"),
         model_settings_override=inner.get("model_settings"),
     )
 

@@ -30,28 +30,9 @@ class AnthropicCachingLitellmModel(LitellmModel):
 
     Detection: case-insensitive substring match on ``"anthropic/"`` or
     ``"claude"`` against the model name.
-
-    For Strix proxy routing where the API model is ``openai/<base>`` but the
-    underlying provider is still Anthropic (e.g., ``strix/claude-sonnet-4.6``
-    resolves to api_model=``openai/claude-sonnet-4.6`` against the Strix
-    proxy with a canonical of ``anthropic/claude-sonnet-4-6``), pass
-    ``is_anthropic_override=True`` so the wrapper still injects cache_control
-    even though the model name doesn't match the heuristic.
     """
 
-    def __init__(
-        self,
-        model: str,
-        *,
-        is_anthropic_override: bool | None = None,
-        **kwargs: Any,
-    ) -> None:
-        super().__init__(model=model, **kwargs)
-        self._is_anthropic_override = is_anthropic_override
-
     def _is_anthropic(self) -> bool:
-        if self._is_anthropic_override is not None:
-            return self._is_anthropic_override
         m = (self.model or "").lower()
         return "anthropic/" in m or "claude" in m
 

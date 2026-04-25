@@ -281,7 +281,7 @@ async def test_create_agent_spawns_and_registers_child() -> None:
             "tool_server_host_port": 12345,
             "caido_host_port": None,
             "tracer": None,
-            "model": "strix/claude-sonnet-4.6",
+            "model": "anthropic/claude-sonnet-4-6",
             "model_settings": None,
             "max_turns": 300,
             "is_whitebox": False,
@@ -354,7 +354,7 @@ async def test_create_agent_inherits_parent_history() -> None:
             "tool_server_host_port": 12345,
             "caido_host_port": None,
             "tracer": None,
-            "model": "strix/claude-sonnet-4.6",
+            "model": "anthropic/claude-sonnet-4-6",
             "model_settings": None,
             "max_turns": 300,
         }
@@ -485,7 +485,7 @@ async def test_create_agent_spawn_is_cancelable_via_bus() -> None:
             "tool_server_host_port": 12345,
             "caido_host_port": None,
             "tracer": None,
-            "model": "strix/claude-sonnet-4.6",
+            "model": "anthropic/claude-sonnet-4-6",
             "model_settings": None,
             "max_turns": 300,
         }

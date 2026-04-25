@@ -20,7 +20,6 @@ from rich.text import Text
 
 from strix.config import Config, apply_saved_config, save_current_config
 from strix.config.config import resolve_llm_config
-from strix.llm.multi_provider_setup import STRIX_MODEL_MAP
 
 
 apply_saved_config()
@@ -58,12 +57,10 @@ def validate_environment() -> None:
     missing_optional_vars = []
 
     strix_llm = Config.get("strix_llm")
-    uses_strix_models = strix_llm and strix_llm.startswith("strix/")
-
     if not strix_llm:
         missing_required_vars.append("STRIX_LLM")
 
-    has_base_url = uses_strix_models or any(
+    has_base_url = any(
         [
             Config.get("llm_api_base"),
             Config.get("openai_api_base"),
@@ -211,13 +208,7 @@ async def warm_up_llm() -> None:
 
     try:
         model_name, api_key, api_base = resolve_llm_config()
-        # ``strix/<alias>`` is routed through the Strix proxy (OpenAI-compatible);
-        # everything else is sent as-is.
         litellm_model: str | None = model_name
-        if model_name and model_name.startswith("strix/"):
-            base = model_name[len("strix/") :]
-            if base in STRIX_MODEL_MAP:
-                litellm_model = f"openai/{base}"
 
         test_messages = [
             {"role": "system", "content": "You are a helpful assistant."},

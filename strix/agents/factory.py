@@ -184,8 +184,8 @@ def build_strix_agent(
         instructions=instructions,
         tools=tools,
         tool_use_behavior=StopAtTools(stop_at_tool_names=list(stop_at)),
-        # model=None so ``RunConfig.model`` (e.g. ``strix/claude-sonnet-4.6``)
-        # routes through MultiProvider rather than the SDK's default.
+        # model=None so ``RunConfig.model`` drives provider selection
+        # via :func:`build_multi_provider` rather than the SDK's default.
         model=None,
     )
 

@@ -81,7 +81,7 @@ STRIX_DEFAULT_MAX_TURNS = 300
 def make_run_config(
     *,
     sandbox_session: BaseSandboxSession | None,
-    model: str = "strix/claude-sonnet-4.6",
+    model: str = "anthropic/claude-sonnet-4-6",
     parallel_tool_calls: bool = _PHASE1_PARALLEL_DEFAULT,
     tool_choice: Literal["auto", "required", "none"] | None = "required",
     reasoning_effort: Literal["low", "medium", "high"] | None = None,
@@ -163,7 +163,7 @@ def make_agent_context(
     agent_name: str,
     parent_id: str | None,
     tracer: Any | None,
-    model: str = "strix/claude-sonnet-4.6",
+    model: str = "anthropic/claude-sonnet-4-6",
     model_settings: ModelSettings | None = None,
     max_turns: int = 300,
     is_whitebox: bool = False,
