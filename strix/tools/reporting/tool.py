@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import re
@@ -152,7 +151,7 @@ _REQUIRED_FIELDS = {
 }
 
 
-def _do_create(  # noqa: PLR0912
+async def _do_create(  # noqa: PLR0912
     *,
     title: str,
     description: str,
@@ -238,7 +237,7 @@ def _do_create(  # noqa: PLR0912
             "endpoint": endpoint,
             "method": method,
         }
-        dedupe = check_duplicate(candidate, existing)
+        dedupe = await check_duplicate(candidate, existing)
         if dedupe.get("is_duplicate"):
             duplicate_id = dedupe.get("duplicate_id", "")
             duplicate_title = next(
@@ -397,8 +396,7 @@ async def create_vulnerability_report(
             ``fix_before`` (verbatim source), ``fix_after`` (suggested
             replacement).
     """
-    result = await asyncio.to_thread(
-        _do_create,
+    result = await _do_create(
         title=title,
         description=description,
         impact=impact,

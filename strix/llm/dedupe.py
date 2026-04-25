@@ -1,10 +1,28 @@
+"""LLM-based vulnerability-report deduplication.
+
+Routes through the same :class:`MultiProvider` (so ``anthropic/...``
+models pick up :class:`AnthropicCachingLitellmModel`'s cache_control
+patching) and :data:`DEFAULT_RETRY` policy as the main agent loop —
+no parallel litellm code path.
+"""
+
+from __future__ import annotations
+
 import json
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import litellm
+from agents.model_settings import ModelSettings
+from agents.models.interface import ModelTracing
+from openai.types.responses import ResponseOutputMessage
 
-from strix.config.config import resolve_llm_config
+from strix.config.config import Config
+from strix.llm.multi_provider_setup import build_multi_provider
+from strix.run_config_factory import DEFAULT_RETRY
+
+
+if TYPE_CHECKING:
+    from agents.items import ModelResponse
 
 
 logger = logging.getLogger(__name__)
@@ -126,7 +144,25 @@ def _parse_dedupe_response(content: str) -> dict[str, Any]:
     }
 
 
-def check_duplicate(
+def _extract_text(response: ModelResponse) -> str:
+    """Concatenate ``output_text`` fragments across every message item.
+
+    The SDK returns OpenAI Responses-API-shaped output; for a plain
+    chat-completion the assistant message has a list of content parts,
+    each of which carries a ``.text`` attribute we can pull verbatim.
+    """
+    parts: list[str] = []
+    for item in response.output:
+        if not isinstance(item, ResponseOutputMessage):
+            continue
+        for chunk in item.content:
+            text = getattr(chunk, "text", None)
+            if text:
+                parts.append(text)
+    return "".join(parts)
+
+
+async def check_duplicate(
     candidate: dict[str, Any], existing_reports: list[dict[str, Any]]
 ) -> dict[str, Any]:
     if not existing_reports:
@@ -138,39 +174,39 @@ def check_duplicate(
         }
 
     try:
+        model_name = Config.get("strix_llm")
+        if not model_name:
+            return {
+                "is_duplicate": False,
+                "duplicate_id": "",
+                "confidence": 0.0,
+                "reason": "STRIX_LLM not configured; skipping dedupe check",
+            }
+
         candidate_cleaned = _prepare_report_for_comparison(candidate)
         existing_cleaned = [_prepare_report_for_comparison(r) for r in existing_reports]
-
         comparison_data = {"candidate": candidate_cleaned, "existing_reports": existing_cleaned}
 
-        model_name, api_key, api_base = resolve_llm_config()
-        litellm_model: str | None = model_name
+        user_msg = (
+            f"Compare this candidate vulnerability against existing reports:\n\n"
+            f"{json.dumps(comparison_data, indent=2)}\n\n"
+            f"Respond with ONLY the JSON object described in the system prompt."
+        )
 
-        messages = [
-            {"role": "system", "content": DEDUPE_SYSTEM_PROMPT},
-            {
-                "role": "user",
-                "content": (
-                    f"Compare this candidate vulnerability against existing reports:\n\n"
-                    f"{json.dumps(comparison_data, indent=2)}\n\n"
-                    f"Respond with ONLY the JSON object described in the system prompt."
-                ),
-            },
-        ]
-
-        completion_kwargs: dict[str, Any] = {
-            "model": litellm_model,
-            "messages": messages,
-            "timeout": 120,
-        }
-        if api_key:
-            completion_kwargs["api_key"] = api_key
-        if api_base:
-            completion_kwargs["api_base"] = api_base
-
-        response = litellm.completion(**completion_kwargs)
-
-        content = response.choices[0].message.content
+        model = build_multi_provider().get_model(model_name)
+        response = await model.get_response(
+            system_instructions=DEDUPE_SYSTEM_PROMPT,
+            input=user_msg,
+            model_settings=ModelSettings(retry=DEFAULT_RETRY),
+            tools=[],
+            output_schema=None,
+            handoffs=[],
+            tracing=ModelTracing.DISABLED,
+            previous_response_id=None,
+            conversation_id=None,
+            prompt=None,
+        )
+        content = _extract_text(response)
         if not content:
             return {
                 "is_duplicate": False,
@@ -182,8 +218,10 @@ def check_duplicate(
         result = _parse_dedupe_response(content)
 
         logger.info(
-            f"Deduplication check: is_duplicate={result['is_duplicate']}, "
-            f"confidence={result['confidence']}, reason={result['reason'][:100]}"
+            "Deduplication check: is_duplicate=%s, confidence=%.2f, reason=%s",
+            result["is_duplicate"],
+            result["confidence"],
+            result["reason"][:100],
         )
 
     except Exception as e:

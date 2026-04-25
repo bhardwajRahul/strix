@@ -33,8 +33,10 @@ STRIX_DEFAULT_MAX_TURNS = 300
 
 # Retry: 5 attempts with ``min(90, 2*2^n)`` backoff. 4xx auth/validation
 # errors are excluded from the retryable status list — they can't be
-# fixed by retrying and should fail fast.
-_DEFAULT_RETRY = ModelRetrySettings(
+# fixed by retrying and should fail fast. Public so the dedupe path
+# (and any other one-shot LLM call outside ``Runner.run``) reuses the
+# same policy.
+DEFAULT_RETRY = ModelRetrySettings(
     max_retries=5,
     backoff=ModelRetryBackoffSettings(
         initial_delay=2.0,
@@ -82,7 +84,7 @@ def make_run_config(
     base_settings = ModelSettings(
         parallel_tool_calls=False,
         tool_choice="required",
-        retry=_DEFAULT_RETRY,
+        retry=DEFAULT_RETRY,
     )
     if reasoning_effort is not None:
         base_settings = base_settings.resolve(
