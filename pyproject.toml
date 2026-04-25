@@ -139,6 +139,7 @@ module = [
     "opentelemetry.*",
     "scrubadub.*",
     "traceloop.*",
+    "docker.*",
 ]
 ignore_missing_imports = true
 
@@ -299,6 +300,9 @@ ignore = [
 "strix/tools/python/python_sdk_tool.py" = ["TC002"]
 "strix/tools/proxy/proxy_sdk_tools.py" = ["TC002"]
 "strix/tools/agents_graph/agents_graph_sdk_tools.py" = ["TC002"]
+# CaidoCapability uses agents.tool.Tool at runtime — pydantic Field
+# annotations and the cached _CAIDO_TOOLS tuple need it eagerly.
+"strix/sandbox/caido_capability.py" = ["TC002"]
 # Sandbox dispatch helper has many short-circuit error returns (auth fail,
 # size cap, decode fail, etc). Each is a distinct, documented failure mode
 # the model needs to see verbatim — collapsing them harms readability.
