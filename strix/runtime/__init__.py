@@ -1,6 +1,6 @@
 """Strix runtime — Docker-backed sandbox lifecycle on top of the Agents SDK.
 
-- :class:`strix.runtime.strix_docker_client.StrixDockerSandboxClient` —
+- :class:`strix.runtime.docker_client.StrixDockerSandboxClient` —
   ``DockerSandboxClient`` subclass that injects ``NET_ADMIN`` /
   ``NET_RAW`` capabilities and ``host.docker.internal`` extra-hosts.
 - :mod:`.session_manager` — ``create_or_reuse`` / ``cleanup`` keyed

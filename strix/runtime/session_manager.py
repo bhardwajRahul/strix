@@ -24,7 +24,7 @@ from agents.sandbox.manifest import Environment, Manifest
 from agents.sandbox.sandboxes.docker import DockerSandboxClientOptions
 
 from strix.runtime.caido_bootstrap import bootstrap_caido
-from strix.runtime.strix_docker_client import StrixDockerSandboxClient
+from strix.runtime.docker_client import StrixDockerSandboxClient
 
 
 if TYPE_CHECKING:

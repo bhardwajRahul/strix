@@ -204,7 +204,7 @@ ignore = [
     "TC003",  # collections.abc.AsyncIterator imported for return type
 ]
 # Custom Docker subclass duplicates parent body; some imports are for annotations.
-"strix/runtime/strix_docker_client.py" = [
+"strix/runtime/docker_client.py" = [
     "TC002",  # Manifest, Container imported for annotations
     "TC003",  # uuid imported for annotation
 ]
