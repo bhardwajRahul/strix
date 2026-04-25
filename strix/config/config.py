@@ -32,13 +32,10 @@ class Config:
 
     # Tool & Feature Configuration
     perplexity_api_key = None
-    strix_disable_browser = "false"
 
     # Runtime Configuration
     strix_image = "ghcr.io/usestrix/strix-sandbox:0.1.13"
     strix_runtime_backend = "docker"
-    strix_sandbox_execution_timeout = "120"
-    strix_sandbox_connect_timeout = "10"
 
     # Telemetry
     strix_telemetry = "1"
