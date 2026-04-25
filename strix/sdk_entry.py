@@ -1,0 +1,282 @@
+"""Top-level SDK scan entry point.
+
+Replaces the legacy ``strix.cli.main → StrixAgent.execute_scan``
+pipeline with the SDK-native equivalent:
+
+1. Build the per-scan ``AgentMessageBus``.
+2. Bring up (or reuse) a sandbox session for ``scan_id`` via the
+   :mod:`strix.sandbox.session_manager`.
+3. Build the root ``Agent`` via :func:`build_strix_agent` and a
+   matching child factory via :func:`make_child_factory`.
+4. Build the root context dict (bus + sandbox bundle + agent_factory).
+5. Register the root in the bus.
+6. Build the ``RunConfig`` via the factory.
+7. Call ``Runner.run(...)`` and surface the result.
+8. ``finally`` cleanup the sandbox session.
+
+Phase 5 lands the wiring; the streaming accumulator + TUI integration
+land in Phase 5b. The entry point is intentionally not wired to the
+CLI yet — that's a follow-up under ``STRIX_USE_SDK_HARNESS=1`` (see
+PLAYBOOK §7.1 cutover plan).
+
+References:
+    - PLAYBOOK.md §3.3 (session manager), §4.3 (graph tools), §7.1
+    - AUDIT_R3.md C9 (cancel_descendants on cleanup)
+"""
+
+from __future__ import annotations
+
+import logging
+import uuid
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+from agents import Runner
+
+from strix.agents.sdk_factory import build_strix_agent, make_child_factory
+from strix.orchestration.bus import AgentMessageBus
+from strix.orchestration.hooks import StrixOrchestrationHooks
+from strix.run_config_factory import (
+    STRIX_DEFAULT_MAX_TURNS,
+    make_agent_context,
+    make_run_config,
+)
+from strix.sandbox import session_manager
+
+
+if TYPE_CHECKING:
+    from agents.result import RunResult
+
+
+logger = logging.getLogger(__name__)
+
+
+def _build_root_task(scan_config: dict[str, Any]) -> str:
+    """Format the user-facing task for the root agent.
+
+    Mirrors :py:meth:`StrixAgent.execute_scan` (legacy) — collects each
+    target type into a labelled section, appends diff-scope context if
+    active, and tacks on user_instructions. The structured shape is
+    important for prompt parity: the system prompt template references
+    these section headers.
+    """
+    targets = scan_config.get("targets", []) or []
+    diff_scope = scan_config.get("diff_scope") or {}
+    user_instructions = scan_config.get("user_instructions", "") or ""
+
+    repos: list[str] = []
+    locals_: list[str] = []
+    urls: list[str] = []
+    ips: list[str] = []
+
+    for target in targets:
+        ttype = target.get("type")
+        details = target.get("details") or {}
+        workspace_subdir = details.get("workspace_subdir")
+        workspace_path = f"/workspace/{workspace_subdir}" if workspace_subdir else "/workspace"
+
+        if ttype == "repository":
+            url = details.get("target_repo", "")
+            cloned = details.get("cloned_repo_path")
+            repos.append(
+                f"- {url} (available at: {workspace_path})" if cloned else f"- {url}",
+            )
+        elif ttype == "local_code":
+            path = details.get("target_path", "unknown")
+            locals_.append(f"- {path} (available at: {workspace_path})")
+        elif ttype == "web_application":
+            urls.append(f"- {details.get('target_url', '')}")
+        elif ttype == "ip_address":
+            ips.append(f"- {details.get('target_ip', '')}")
+
+    parts: list[str] = []
+    if repos:
+        parts.append("\n\nRepositories:")
+        parts.extend(repos)
+    if locals_:
+        parts.append("\n\nLocal Codebases:")
+        parts.extend(locals_)
+    if urls:
+        parts.append("\n\nURLs:")
+        parts.extend(urls)
+    if ips:
+        parts.append("\n\nIP Addresses:")
+        parts.extend(ips)
+
+    if diff_scope.get("active"):
+        parts.append("\n\nScope Constraints:")
+        parts.append(
+            "- Pull request diff-scope mode is active. Prioritize changed files "
+            "and use other files only for context.",
+        )
+        for repo_scope in diff_scope.get("repos", []) or []:
+            label = (
+                repo_scope.get("workspace_subdir") or repo_scope.get("source_path") or "repository"
+            )
+            changed = repo_scope.get("analyzable_files_count", 0)
+            deleted = repo_scope.get("deleted_files_count", 0)
+            parts.append(f"- {label}: {changed} changed file(s) in primary scope")
+            if deleted:
+                parts.append(f"- {label}: {deleted} deleted file(s) are context-only")
+
+    task = " ".join(parts)
+    if user_instructions:
+        task = f"{task}\n\nSpecial instructions: {user_instructions}"
+    return task
+
+
+def _build_scope_context(scan_config: dict[str, Any]) -> dict[str, Any]:
+    """Produce the system_prompt_context block used by the prompt template.
+
+    Same shape as the legacy
+    :py:meth:`StrixAgent._build_system_scope_context` so the prompt
+    template's ``system_prompt_context.authorized_targets`` lookups
+    stay byte-identical.
+    """
+    authorized: list[dict[str, str]] = []
+    for target in scan_config.get("targets", []) or []:
+        ttype = target.get("type", "unknown")
+        details = target.get("details") or {}
+
+        if ttype == "repository":
+            value = details.get("target_repo", "")
+        elif ttype == "local_code":
+            value = details.get("target_path", "")
+        elif ttype == "web_application":
+            value = details.get("target_url", "")
+        elif ttype == "ip_address":
+            value = details.get("target_ip", "")
+        else:
+            value = target.get("original", "")
+
+        workspace_subdir = details.get("workspace_subdir")
+        workspace_path = f"/workspace/{workspace_subdir}" if workspace_subdir else ""
+        authorized.append(
+            {"type": ttype, "value": value, "workspace_path": workspace_path},
+        )
+
+    return {
+        "scope_source": "system_scan_config",
+        "authorization_source": "strix_platform_verified_targets",
+        "authorized_targets": authorized,
+        "user_instructions_do_not_expand_scope": True,
+    }
+
+
+async def run_strix_scan(
+    *,
+    scan_config: dict[str, Any],
+    scan_id: str | None = None,
+    image: str,
+    sources_path: Path,
+    tracer: Any | None = None,
+    interactive: bool = False,
+    max_turns: int = STRIX_DEFAULT_MAX_TURNS,
+    cleanup_on_exit: bool = True,
+) -> RunResult:
+    """Run one Strix scan end-to-end against a freshly-prepared sandbox.
+
+    Args:
+        scan_config: Same shape the legacy ``StrixAgent.execute_scan``
+            takes (targets, user_instructions, diff_scope, scan_mode,
+            is_whitebox, skills).
+        scan_id: Used to key the sandbox session cache. Auto-generated
+            if omitted — callers that want resume-after-crash semantics
+            should pass a stable id.
+        image: Docker image tag for the sandbox (e.g.
+            ``"strix-sandbox:0.1.13"``).
+        sources_path: Host directory mounted into ``/workspace/sources``.
+        tracer: Optional Strix tracer. Stored in context for the
+            telemetry hook chain. Pass ``None`` for unit tests.
+        interactive: Renders the interactive-mode prompt block on the
+            root agent.
+        max_turns: Cap on root-agent LLM turns. Mirrors legacy
+            ``AgentState.max_iterations`` (300).
+        cleanup_on_exit: When True (default), tears down the sandbox
+            session in a ``finally``. Set to False for resume scenarios
+            where the caller wants to preserve the container.
+
+    Returns the SDK ``RunResult`` from ``Runner.run``. Raises if the
+    sandbox bring-up fails or the run itself raises.
+    """
+    if scan_id is None:
+        scan_id = f"scan-{uuid.uuid4().hex[:8]}"
+    logger.info("Starting Strix scan %s", scan_id)
+
+    bus = AgentMessageBus()
+    root_id = uuid.uuid4().hex[:8]
+
+    bundle = await session_manager.create_or_reuse(
+        scan_id,
+        image=image,
+        sources_path=sources_path,
+    )
+
+    try:
+        scan_mode = str(scan_config.get("scan_mode") or "deep")
+        is_whitebox = bool(scan_config.get("is_whitebox", False))
+        skills = list(scan_config.get("skills") or [])
+        diff_scope = scan_config.get("diff_scope") or None
+        run_id = scan_config.get("run_id") or scan_id
+
+        scope_context = _build_scope_context(scan_config)
+
+        root_agent = build_strix_agent(
+            name="strix",
+            skills=skills,
+            is_root=True,
+            scan_mode=scan_mode,
+            is_whitebox=is_whitebox,
+            interactive=interactive,
+            system_prompt_context=scope_context,
+        )
+
+        await bus.register(root_id, "strix", parent_id=None)
+
+        agent_factory = make_child_factory(
+            scan_mode=scan_mode,
+            is_whitebox=is_whitebox,
+            interactive=interactive,
+            system_prompt_context=scope_context,
+        )
+
+        context = make_agent_context(
+            bus=bus,
+            sandbox_session=bundle["session"],
+            sandbox_client=bundle["client"],
+            sandbox_token=bundle["bearer"],
+            tool_server_host_port=bundle["tool_server_host_port"],
+            caido_host_port=bundle["caido_host_port"],
+            agent_id=root_id,
+            agent_name="strix",
+            parent_id=None,
+            tracer=tracer,
+            max_turns=max_turns,
+            is_whitebox=is_whitebox,
+            diff_scope=diff_scope,
+            run_id=run_id,
+            agent_factory=agent_factory,
+        )
+
+        run_config = make_run_config(
+            sandbox_session=bundle["session"],
+            sandbox_client=bundle["client"],
+        )
+
+        task_text = _build_root_task(scan_config)
+        return await Runner.run(
+            root_agent,
+            input=task_text,
+            run_config=run_config,
+            context=context,
+            hooks=StrixOrchestrationHooks(),
+            max_turns=max_turns,
+        )
+    except BaseException:
+        # Cancel any descendant tasks the root spawned before unwinding.
+        # cancel_descendants is idempotent and handles the empty-tree case.
+        await bus.cancel_descendants(root_id)
+        raise
+    finally:
+        if cleanup_on_exit:
+            await session_manager.cleanup(scan_id)

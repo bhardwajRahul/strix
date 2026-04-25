@@ -303,6 +303,15 @@ ignore = [
 # CaidoCapability uses agents.tool.Tool at runtime — pydantic Field
 # annotations and the cached _CAIDO_TOOLS tuple need it eagerly.
 "strix/sandbox/caido_capability.py" = ["TC002"]
+# Agent factory: agents.tool.Tool is used at runtime in the _BASE_TOOLS
+# tuple type, not just for annotations.
+"strix/agents/sdk_factory.py" = ["TC002"]
+# Entry point: ``Path`` is used at runtime by the typing of the
+# session_manager call; importing under TYPE_CHECKING would defer
+# resolution past where mypy needs it. ``_build_root_task`` legitimately
+# walks every supported target type — splitting it into per-type
+# helpers would add indirection without simplifying anything.
+"strix/sdk_entry.py" = ["TC003", "PLR0912"]
 # Sandbox dispatch helper has many short-circuit error returns (auth fail,
 # size cap, decode fail, etc). Each is a distinct, documented failure mode
 # the model needs to see verbatim — collapsing them harms readability.
