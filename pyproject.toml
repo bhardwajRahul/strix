@@ -248,11 +248,13 @@ ignore = [
 "strix/llm/llm.py" = ["PLC0415"]
 "strix/tools/notes/notes_actions.py" = ["PLC0415"]
 "tests/**/*.py" = [
-    "S106",   # Possible hardcoded password
+    "S105",   # Possible hardcoded password (string literal)
+    "S106",   # Possible hardcoded password (function call)
     "S108",   # Possible insecure usage of temporary file/directory
     "ARG001", # Unused function argument
     "ARG002", # Unused method argument (test helpers / fakes mirror SDK signatures)
     "PLR2004", # Magic value used in comparison
+    "PT018",  # Multi-part assertions are a pytest style preference
     "TC002",  # Type-only third-party import (tests import for runtime instantiation)
     "TC003",  # Type-only stdlib import
 ]
@@ -281,6 +283,11 @@ ignore = [
 "strix/tools/_decorator.py" = [
     "TC002",  # FunctionTool imported for annotation
 ]
+# StrixSession + StrixTracingProcessor catch broad Exception intentionally:
+# the whole point is that compressor / sanitizer / disk failures must not
+# tear down the agent run (C10, C16). Calls already log at exception level.
+"strix/llm/strix_session.py" = ["BLE001"]
+"strix/telemetry/strix_processor.py" = ["BLE001"]
 
 [tool.ruff.lint.isort]
 force-single-line = false
