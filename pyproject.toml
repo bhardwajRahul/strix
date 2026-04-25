@@ -289,6 +289,11 @@ ignore = [
 "strix/tools/todo/todo_sdk_tools.py" = ["TC002"]
 "strix/tools/notes/notes_sdk_tools.py" = ["TC002"]
 "strix/tools/thinking/thinking_sdk_tools.py" = ["TC002"]
+"strix/tools/web_search/web_search_sdk_tool.py" = ["TC002"]
+"strix/tools/file_edit/file_edit_sdk_tools.py" = ["TC002"]
+"strix/tools/reporting/reporting_sdk_tools.py" = ["TC002"]
+"strix/tools/load_skill/load_skill_sdk_tool.py" = ["TC002"]
+"strix/tools/finish/finish_sdk_tool.py" = ["TC002"]
 # Sandbox dispatch helper has many short-circuit error returns (auth fail,
 # size cap, decode fail, etc). Each is a distinct, documented failure mode
 # the model needs to see verbatim — collapsing them harms readability.
