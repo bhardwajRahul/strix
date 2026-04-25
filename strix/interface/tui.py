@@ -31,7 +31,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, Label, Static, TextArea, Tree
 from textual.widgets.tree import TreeNode
 
-from strix.config import Config
+from strix.config import load_settings
 from strix.entry import run_strix_scan
 from strix.interface.tool_components.agent_message_renderer import AgentMessageRenderer
 from strix.interface.tool_components.registry import get_tool_renderer
@@ -763,7 +763,6 @@ class StrixTUIApp(App):  # type: ignore[misc]
             "run_name": args.run_name,
             "diff_scope": getattr(args, "diff_scope", {"active": False}),
             "scan_mode": getattr(args, "scan_mode", "deep"),
-            "is_whitebox": bool(getattr(args, "local_sources", [])),
         }
 
     def _setup_cleanup_handlers(self) -> None:
@@ -1408,7 +1407,7 @@ class StrixTUIApp(App):  # type: ignore[misc]
 
                 try:
                     if not self._scan_stop_event.is_set():
-                        image = Config.get("strix_image") or "strix-sandbox:latest"
+                        image = load_settings().runtime.image or "strix-sandbox:latest"
                         sources_path = self._resolve_sources_path()
                         loop.run_until_complete(
                             run_strix_scan(

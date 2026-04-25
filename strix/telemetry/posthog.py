@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
-from strix.config import Config
+from strix.config import load_settings
 
 
 if TYPE_CHECKING:
@@ -15,18 +15,12 @@ if TYPE_CHECKING:
 _POSTHOG_PUBLIC_API_KEY = "phc_7rO3XRuNT5sgSKAl6HDIrWdSGh1COzxw0vxVIAR6vVZ"
 _POSTHOG_HOST = "https://us.i.posthog.com"
 
-_DISABLED_VALUES = {"0", "false", "no", "off"}
-
 _SESSION_ID = uuid4().hex[:16]
 
 
 def _is_enabled() -> bool:
     """Master telemetry gate. ``STRIX_POSTHOG_TELEMETRY`` overrides ``STRIX_TELEMETRY``."""
-    explicit = Config.get("strix_posthog_telemetry")
-    if explicit is not None:
-        return explicit.strip().lower() not in _DISABLED_VALUES
-    fallback = Config.get("strix_telemetry") or "1"
-    return fallback.strip().lower() not in _DISABLED_VALUES
+    return load_settings().telemetry.posthog_enabled
 
 
 def _is_first_run() -> bool:

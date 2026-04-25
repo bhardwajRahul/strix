@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 from typing import Any
 
 import requests
 from agents import RunContextWrapper, function_tool
+
+from strix.config import load_settings
 
 
 _SYSTEM_PROMPT = """You are assisting a cybersecurity agent specialized in vulnerability scanning
@@ -37,7 +38,7 @@ security implications and details."""
 
 
 def _do_search(query: str) -> dict[str, Any]:
-    api_key = os.getenv("PERPLEXITY_API_KEY")
+    api_key = load_settings().integrations.perplexity_api_key
     if not api_key:
         return {
             "success": False,

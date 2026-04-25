@@ -24,7 +24,7 @@ from agents import Runner
 from agents.memory import SQLiteSession
 
 from strix.agents.factory import build_strix_agent, make_child_factory
-from strix.config.config import Config
+from strix.config import load_settings
 from strix.orchestration.bus import AgentMessageBus
 from strix.orchestration.hooks import StrixOrchestrationHooks
 from strix.run_config_factory import (
@@ -206,8 +206,11 @@ async def run_strix_scan(
     )
 
     try:
+        # Lazy: ``strix.interface`` pulls cli→tui→entry which would cycle.
+        from strix.interface.utils import is_whitebox_scan
+
         scan_mode = str(scan_config.get("scan_mode") or "deep")
-        is_whitebox = bool(scan_config.get("is_whitebox", False))
+        is_whitebox = is_whitebox_scan(scan_config.get("targets") or [])
         skills = list(scan_config.get("skills") or [])
         diff_scope = scan_config.get("diff_scope") or None
         run_id = scan_config.get("run_id") or scan_id
@@ -249,9 +252,8 @@ async def run_strix_scan(
             agent_factory=agent_factory,
         )
 
-        reasoning = Config.get("strix_reasoning_effort")
         reasoning_effort: Literal["low", "medium", "high"] | None = (
-            reasoning if reasoning in ("low", "medium", "high") else None  # type: ignore[assignment]
+            load_settings().llm.reasoning_effort
         )
         run_config = make_run_config(
             sandbox_session=bundle["session"],

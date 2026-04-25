@@ -16,7 +16,7 @@ from agents.model_settings import ModelSettings
 from agents.models.interface import ModelTracing
 from openai.types.responses import ResponseOutputMessage
 
-from strix.config.config import Config
+from strix.config import load_settings
 from strix.llm.multi_provider_setup import build_multi_provider
 from strix.run_config_factory import DEFAULT_RETRY
 
@@ -174,7 +174,7 @@ async def check_duplicate(
         }
 
     try:
-        model_name = Config.get("strix_llm")
+        model_name = load_settings().llm.model
         if not model_name:
             return {
                 "is_duplicate": False,

@@ -20,7 +20,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
 
-from strix.config import Config
+from strix.config import load_settings
 
 
 # Token formatting utilities
@@ -304,7 +304,7 @@ def build_live_stats_text(tracer: Any) -> Text:
     if not tracer:
         return stats_text
 
-    model = Config.get("strix_llm") or "unknown"
+    model = load_settings().llm.model or "unknown"
     stats_text.append("Model ", style="dim")
     stats_text.append(str(model), style="white")
     stats_text.append("\n")
@@ -375,7 +375,7 @@ def build_tui_stats_text(tracer: Any) -> Text:
     if not tracer:
         return stats_text
 
-    model = Config.get("strix_llm") or "unknown"
+    model = load_settings().llm.model or "unknown"
     stats_text.append(str(model), style="white")
 
     llm_stats = tracer.get_total_llm_stats()
@@ -1188,6 +1188,11 @@ def assign_workspace_subdirs(targets_info: list[dict[str, Any]]) -> None:
         workspace_subdir = base_name if count == 1 else f"{base_name}-{count}"
 
         details["workspace_subdir"] = workspace_subdir
+
+
+def is_whitebox_scan(targets_info: list[dict[str, Any]]) -> bool:
+    """True iff any target is a local source tree (whitebox / source-aware)."""
+    return any(t.get("type") == "local_code" for t in targets_info or [])
 
 
 def collect_local_sources(targets_info: list[dict[str, Any]]) -> list[dict[str, str]]:

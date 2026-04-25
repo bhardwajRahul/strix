@@ -13,7 +13,7 @@ from rich.live import Live
 from rich.panel import Panel
 from rich.text import Text
 
-from strix.config import Config
+from strix.config import load_settings
 from strix.entry import run_strix_scan
 from strix.runtime import session_manager
 from strix.telemetry.tracer import Tracer, set_global_tracer
@@ -25,12 +25,12 @@ from .utils import (
 
 
 def _resolve_sandbox_image() -> str:
-    image = Config.get("strix_image")
+    image = load_settings().runtime.image
     if not image:
         raise RuntimeError(
             "strix_image is not configured. Set it in ~/.strix/cli-config.json.",
         )
-    return str(image)
+    return image
 
 
 def _resolve_sources_path(args: Any) -> Path:
@@ -99,7 +99,6 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
     console.print()
 
     scan_mode = getattr(args, "scan_mode", "deep")
-    is_whitebox = bool(getattr(args, "local_sources", []))
 
     scan_config: dict[str, Any] = {
         "scan_id": args.run_name,
@@ -108,7 +107,6 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
         "run_name": args.run_name,
         "diff_scope": getattr(args, "diff_scope", {"active": False}),
         "scan_mode": scan_mode,
-        "is_whitebox": is_whitebox,
     }
 
     tracer = Tracer(args.run_name)

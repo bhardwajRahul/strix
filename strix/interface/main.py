@@ -6,7 +6,6 @@ Strix Agent Interface
 import argparse
 import asyncio
 import logging
-import os
 import shutil
 import sys
 from pathlib import Path
@@ -18,15 +17,10 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
 
-from strix.config import Config, apply_saved_config, save_current_config
-from strix.config.config import resolve_llm_config
-
-
-apply_saved_config()
-
-from strix.interface.cli import run_cli  # noqa: E402
-from strix.interface.tui import run_tui  # noqa: E402
-from strix.interface.utils import (  # noqa: E402
+from strix.config import apply_config_override, load_settings, persist_current
+from strix.interface.cli import run_cli
+from strix.interface.tui import run_tui
+from strix.interface.utils import (
     assign_workspace_subdirs,
     build_final_stats_text,
     check_docker_connection,
@@ -35,17 +29,18 @@ from strix.interface.utils import (  # noqa: E402
     generate_run_name,
     image_exists,
     infer_target_type,
+    is_whitebox_scan,
     process_pull_line,
     resolve_diff_scope_context,
     rewrite_localhost_targets,
     validate_config_file,
     validate_llm_response,
 )
+from strix.telemetry import posthog
+from strix.telemetry.tracer import get_global_tracer
 
 
 HOST_GATEWAY_HOSTNAME = "host.docker.internal"
-from strix.telemetry import posthog  # noqa: E402
-from strix.telemetry.tracer import get_global_tracer  # noqa: E402
 
 
 logging.getLogger().setLevel(logging.ERROR)
@@ -56,30 +51,19 @@ def validate_environment() -> None:
     missing_required_vars = []
     missing_optional_vars = []
 
-    strix_llm = Config.get("strix_llm")
-    if not strix_llm:
+    settings = load_settings()
+
+    if not settings.llm.model:
         missing_required_vars.append("STRIX_LLM")
 
-    has_base_url = any(
-        [
-            Config.get("llm_api_base"),
-            Config.get("openai_api_base"),
-            Config.get("litellm_base_url"),
-            Config.get("ollama_api_base"),
-        ]
-    )
-
-    if not Config.get("llm_api_key"):
+    if not settings.llm.api_key:
         missing_optional_vars.append("LLM_API_KEY")
 
-    if not has_base_url:
+    if not settings.llm.api_base:
         missing_optional_vars.append("LLM_API_BASE")
 
-    if not Config.get("perplexity_api_key"):
+    if not settings.integrations.perplexity_api_key:
         missing_optional_vars.append("PERPLEXITY_API_KEY")
-
-    if not Config.get("strix_reasoning_effort"):
-        missing_optional_vars.append("STRIX_REASONING_EFFORT")
 
     if missing_required_vars:
         error_text = Text()
@@ -207,25 +191,22 @@ async def warm_up_llm() -> None:
     console = Console()
 
     try:
-        model_name, api_key, api_base = resolve_llm_config()
-        litellm_model: str | None = model_name
+        llm = load_settings().llm
 
         test_messages = [
             {"role": "system", "content": "You are a helpful assistant."},
             {"role": "user", "content": "Reply with just 'OK'."},
         ]
 
-        llm_timeout = int(Config.get("llm_timeout") or "300")
-
         completion_kwargs: dict[str, Any] = {
-            "model": litellm_model,
+            "model": llm.model,
             "messages": test_messages,
-            "timeout": llm_timeout,
+            "timeout": llm.timeout,
         }
-        if api_key:
-            completion_kwargs["api_key"] = api_key
-        if api_base:
-            completion_kwargs["api_base"] = api_base
+        if llm.api_key:
+            completion_kwargs["api_key"] = llm.api_key
+        if llm.api_base:
+            completion_kwargs["api_base"] = llm.api_base
 
         response = litellm.completion(**completion_kwargs)
 
@@ -486,11 +467,13 @@ def pull_docker_image() -> None:
     console = Console()
     client = check_docker_connection()
 
-    if image_exists(client, Config.get("strix_image")):  # type: ignore[arg-type]
+    image = load_settings().runtime.image
+
+    if image_exists(client, image):
         return
 
     console.print()
-    console.print(f"[dim]Pulling image[/] {Config.get('strix_image')}")
+    console.print(f"[dim]Pulling image[/] {image}")
     console.print("[dim yellow]This only happens on first run and may take a few minutes...[/]")
     console.print()
 
@@ -499,7 +482,7 @@ def pull_docker_image() -> None:
             layers_info: dict[str, str] = {}
             last_update = ""
 
-            for line in client.api.pull(Config.get("strix_image"), stream=True, decode=True):
+            for line in client.api.pull(image, stream=True, decode=True):
                 last_update = process_pull_line(line, layers_info, status, last_update)
 
         except DockerException as e:
@@ -507,7 +490,7 @@ def pull_docker_image() -> None:
             error_text = Text()
             error_text.append("FAILED TO PULL IMAGE", style="bold red")
             error_text.append("\n\n", style="white")
-            error_text.append(f"Could not download: {Config.get('strix_image')}\n", style="white")
+            error_text.append(f"Could not download: {image}\n", style="white")
             error_text.append(str(e), style="dim red")
 
             panel = Panel(
@@ -526,22 +509,6 @@ def pull_docker_image() -> None:
     console.print()
 
 
-def apply_config_override(config_path: str) -> None:
-    # Clear env vars that were automatically applied from the default config file
-    # so they don't leak into the custom config context.
-    for var_name in Config._applied_from_default:
-        os.environ.pop(var_name, None)
-    Config._applied_from_default = {}
-
-    Config._config_file_override = validate_config_file(config_path)
-    apply_saved_config(force=True)
-
-
-def persist_config() -> None:
-    if Config._config_file_override is None:
-        save_current_config()
-
-
 def main() -> None:
     if sys.platform == "win32":
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
@@ -549,7 +516,7 @@ def main() -> None:
     args = parse_arguments()
 
     if args.config:
-        apply_config_override(args.config)
+        apply_config_override(validate_config_file(args.config))
 
     check_docker_installed()
     pull_docker_image()
@@ -557,7 +524,7 @@ def main() -> None:
     validate_environment()
     asyncio.run(warm_up_llm())
 
-    persist_config()
+    persist_current()
 
     args.run_name = generate_run_name(args.targets_info)
 
@@ -602,12 +569,10 @@ def main() -> None:
         else:
             args.instruction = diff_scope.instruction_block
 
-    is_whitebox = bool(args.local_sources)
-
     posthog.start(
-        model=Config.get("strix_llm"),
+        model=load_settings().llm.model,
         scan_mode=args.scan_mode,
-        is_whitebox=is_whitebox,
+        is_whitebox=is_whitebox_scan(args.targets_info),
         interactive=not args.non_interactive,
         has_instructions=bool(args.instruction),
     )

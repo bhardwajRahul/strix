@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Any
 from agents.sandbox.entries import LocalDir
 from agents.sandbox.manifest import Environment, Manifest
 
-from strix.config.config import Config
+from strix.config import load_settings
 from strix.runtime.backends import get_backend
 from strix.runtime.caido_bootstrap import bootstrap_caido
 
@@ -86,7 +86,7 @@ async def create_or_reuse(
         ),
     )
 
-    backend_name = Config.get("strix_runtime_backend") or "docker"
+    backend_name = load_settings().runtime.backend
     backend = get_backend(backend_name)
 
     logger.info(
