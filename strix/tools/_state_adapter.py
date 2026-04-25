@@ -8,7 +8,6 @@ adapter object from the run context.
 
 Used by:
     - ``tools/todo/tools.py``
-    - ``tools/load_skill/tool.py``
     - ``tools/finish/tool.py``
 """
 

@@ -21,8 +21,9 @@ Two flavors:
 
 Caido tools come from ``CaidoCapability.tools()`` automatically via
 the SDK's capability merge — we don't include them here. Skills are
-injected via the prompt; the model can also load more at runtime via
-the ``load_skill`` tool.
+injected via the prompt at scan-bring-up time; runtime skill loading
+isn't exposed as a tool any more (the legacy implementation reached
+into a global agent registry that no longer exists).
 
 References:
     - PLAYBOOK.md §4.3 (graph tool wiring)
@@ -54,7 +55,6 @@ from strix.tools.file_edit.tools import (
     str_replace_editor,
 )
 from strix.tools.finish.tool import finish_scan
-from strix.tools.load_skill.tool import load_skill
 from strix.tools.notes.tools import (
     create_note,
     delete_note,
@@ -109,8 +109,6 @@ _BASE_TOOLS: tuple[Tool, ...] = (
     search_files,
     # Reporting
     create_vulnerability_report,
-    # Skill loading
-    load_skill,
     # Sandbox primitives
     browser_action,
     terminal_execute,
@@ -140,8 +138,7 @@ def build_strix_agent(
         name: Agent name. Surfaces in traces and the bus's ``names`` map.
             Defaults to ``"strix"`` for the root; create_agent passes
             distinct names per child.
-        skills: Skills to preload into the system prompt. The agent can
-            also load more at runtime via the ``load_skill`` tool.
+        skills: Skills to preload into the system prompt.
         is_root: Selects the tool list and ``tool_use_behavior``.
             Root carries ``finish_scan`` and stops there; child carries
             ``agent_finish`` and stops there.

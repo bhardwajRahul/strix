@@ -67,9 +67,7 @@ def render_system_prompt(
     """Render the system prompt.
 
     Args:
-        skills: Skills the caller wants preloaded into the prompt
-            context (the agent can also load more at runtime via the
-            ``load_skill`` tool).
+        skills: Skills the caller wants preloaded into the prompt context.
         scan_mode: ``"deep" | "fast" | ...``. Maps to ``scan_modes/<mode>``
             skill.
         is_whitebox: When True, the source-aware whitebox skill stack

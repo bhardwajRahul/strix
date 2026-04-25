@@ -171,6 +171,7 @@ def make_agent_context(
     run_id: str | None = None,
     sandbox_client: Any | None = None,
     agent_factory: Any | None = None,
+    caido_capability: Any | None = None,
 ) -> dict[str, Any]:
     """Build the per-agent ``context`` dict passed to ``Runner.run(context=...)``.
 
@@ -190,6 +191,7 @@ def make_agent_context(
         "sandbox_token": sandbox_token,
         "tool_server_host_port": tool_server_host_port,
         "caido_host_port": caido_host_port,
+        "caido_capability": caido_capability,
         "agent_id": agent_id,
         "agent_name": agent_name,
         "parent_id": parent_id,

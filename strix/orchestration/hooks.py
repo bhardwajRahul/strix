@@ -84,14 +84,31 @@ class StrixOrchestrationHooks(RunHooks[Any]):
         agent: Any,
         response: ModelResponse,
     ) -> None:
+        del agent
         try:
             ctx = context.context
             if not isinstance(ctx, dict):
                 return
-            bus = ctx.get("bus")
+            usage = getattr(response, "usage", None)
             agent_id = ctx.get("agent_id")
+            bus = ctx.get("bus")
             if bus is not None and agent_id is not None:
-                await bus.record_usage(agent_id, getattr(response, "usage", None))
+                await bus.record_usage(agent_id, usage)
+            tracer = ctx.get("tracer")
+            if tracer is not None and usage is not None and hasattr(tracer, "record_llm_usage"):
+                cached = 0
+                details = getattr(usage, "input_tokens_details", None)
+                if details is not None:
+                    cached = int(getattr(details, "cached_tokens", 0) or 0)
+                tracer.record_llm_usage(
+                    agent_id=str(agent_id or "unknown"),
+                    input_tokens=int(getattr(usage, "input_tokens", 0) or 0),
+                    output_tokens=int(getattr(usage, "output_tokens", 0) or 0),
+                    cached_tokens=cached,
+                    cost=0.0,  # litellm cost computation lives in the legacy LLM
+                    requests=1,
+                    bucket="live",
+                )
             ctx["turn_count"] = int(ctx.get("turn_count", 0)) + 1
         except Exception:
             logger.exception("on_llm_end failed")
@@ -101,17 +118,19 @@ class StrixOrchestrationHooks(RunHooks[Any]):
         context: AgentHookContext[Any],
         agent: Any,
     ) -> None:
+        # The CaidoCapability is bound to the sandbox session, not the
+        # Agent (we use plain ``Agent``, not ``SandboxAgent``). We stash
+        # it in the context dict at scan-bring-up time so the hook can
+        # await its healthcheck before the first LLM call.
+        del agent
         try:
-            cap = next(
-                (
-                    c
-                    for c in (getattr(agent, "capabilities", None) or [])
-                    if hasattr(c, "_healthcheck_task")
-                ),
-                None,
-            )
-            if cap is not None and getattr(cap, "_healthcheck_task", None) is not None:
-                await cap._healthcheck_task
+            ctx = context.context
+            if not isinstance(ctx, dict):
+                return
+            cap = ctx.get("caido_capability")
+            task = getattr(cap, "_healthcheck_task", None)
+            if task is not None:
+                await task
         except Exception:
             logger.exception("on_agent_start failed")
 

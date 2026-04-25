@@ -148,9 +148,7 @@ OPERATIONAL PRINCIPLES:
 - Default to recon first. Unless the next step is obvious from context or the user/system gives specific prioritization instructions, begin by mapping the target well before diving into narrow validation or targeted testing
 - Prefer established industry-standard tools already available in the sandbox before writing custom scripts
 - Do NOT reinvent the wheel with ad hoc Python or shell code when a suitable existing tool can do the job reliably
-- Use the load_skill tool when you need exact vulnerability-specific, protocol-specific, or tool-specific guidance before acting
-- Prefer loading a relevant skill before guessing payloads, workflows, or tool syntax from memory
-- If a task maps cleanly to one or more available skills, load them early and let them guide your next actions
+- Skills relevant to your task are preloaded into this prompt at scan start; refer back to them when you need vulnerability-, protocol-, or tool-specific guidance
 - Use custom Python or shell code when you want to dig deeper, automate custom workflows, batch operations, triage results, build target-specific validation, or do work that existing tools do not cover cleanly
 - Chain related weaknesses when needed to demonstrate real impact
 - Consider business logic and context in validation

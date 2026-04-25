@@ -711,6 +711,13 @@ class StrixTUIApp(App):  # type: ignore[misc]
         self.tracer.set_scan_config(self.scan_config)
         set_global_tracer(self.tracer)
 
+        # Pre-create the bus here (rather than letting ``run_strix_scan``
+        # build its own) so the TUI can hold a handle for stop / chat
+        # routing while the scan loop runs in a worker thread.
+        from strix.orchestration.bus import AgentMessageBus
+
+        self.bus: AgentMessageBus = AgentMessageBus()
+
         self.agent_nodes: dict[str, TreeNode] = {}
 
         self._displayed_agents: set[str] = set()
@@ -720,6 +727,7 @@ class StrixTUIApp(App):  # type: ignore[misc]
         self._last_streaming_len: dict[str, int] = {}
 
         self._scan_thread: threading.Thread | None = None
+        self._scan_loop: asyncio.AbstractEventLoop | None = None
         self._scan_stop_event = threading.Event()
         self._scan_completed = threading.Event()
 
@@ -1496,6 +1504,10 @@ class StrixTUIApp(App):  # type: ignore[misc]
             try:
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
+                # Stash the loop so synchronous TUI handlers (stop /
+                # chat) can submit bus coroutines onto it from the
+                # main thread.
+                self._scan_loop = loop
 
                 try:
                     if not self._scan_stop_event.is_set():
@@ -1508,6 +1520,7 @@ class StrixTUIApp(App):  # type: ignore[misc]
                                 image=str(image),
                                 sources_path=sources_path,
                                 tracer=self.tracer,
+                                bus=self.bus,
                                 interactive=True,
                             ),
                         )
@@ -1827,10 +1840,6 @@ class StrixTUIApp(App):  # type: ignore[misc]
                     metadata={"interrupted": True},
                 )
 
-        # TODO: route user→agent messages through the AgentMessageBus
-        # once the TUI has a handle on it. The bus currently lives
-        # inside ``run_strix_scan`` scope only.
-
         if self.tracer:
             self.tracer.log_chat_message(
                 content=message,
@@ -1838,11 +1847,18 @@ class StrixTUIApp(App):  # type: ignore[misc]
                 agent_id=self.selected_agent_id,
             )
 
-        logging.warning(
-            "User-message-to-agent dispatch is not wired post-migration; "
-            "message %r logged to tracer but not delivered.",
-            message,
-        )
+        # Route to the agent's bus inbox. The scan loop runs on a
+        # worker thread; ``run_coroutine_threadsafe`` submits the
+        # coroutine onto that loop and returns immediately so the TUI
+        # stays responsive.
+        if self._scan_loop is not None and not self._scan_loop.is_closed():
+            asyncio.run_coroutine_threadsafe(
+                self.bus.send(
+                    self.selected_agent_id,
+                    {"from": "user", "content": message, "type": "instruction"},
+                ),
+                self._scan_loop,
+            )
 
         self._displayed_events.clear()
         self._update_chat_view()
@@ -1941,11 +1957,12 @@ class StrixTUIApp(App):  # type: ignore[misc]
         return agent_name, False
 
     def action_confirm_stop_agent(self, agent_id: str) -> None:
-        # TODO: route to ``bus.cancel_descendants(agent_id)`` once the TUI
-        # has a handle on the AgentMessageBus.
-        logging.warning(
-            "Stop-agent dispatch is not wired post-migration; agent %s left running.",
-            agent_id,
+        if self._scan_loop is None or self._scan_loop.is_closed():
+            logging.warning("No active scan loop; cannot stop agent %s", agent_id)
+            return
+        asyncio.run_coroutine_threadsafe(
+            self.bus.cancel_descendants(agent_id),
+            self._scan_loop,
         )
 
     def action_custom_quit(self) -> None:

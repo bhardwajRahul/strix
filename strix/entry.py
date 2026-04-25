@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from agents import Runner
+from agents.tracing import add_trace_processor
 
 from strix.agents.factory import build_strix_agent, make_child_factory
 from strix.orchestration.bus import AgentMessageBus
@@ -31,6 +32,7 @@ from strix.run_config_factory import (
     make_run_config,
 )
 from strix.sandbox import session_manager
+from strix.telemetry.strix_processor import StrixTracingProcessor
 
 
 if TYPE_CHECKING:
@@ -156,8 +158,10 @@ async def run_strix_scan(
     image: str,
     sources_path: Path,
     tracer: Any | None = None,
+    bus: AgentMessageBus | None = None,
     interactive: bool = False,
     max_turns: int = STRIX_DEFAULT_MAX_TURNS,
+    model: str = "anthropic/claude-sonnet-4-6",
     cleanup_on_exit: bool = True,
 ) -> RunResult:
     """Run one Strix scan end-to-end against a freshly-prepared sandbox.
@@ -188,8 +192,24 @@ async def run_strix_scan(
         scan_id = f"scan-{uuid.uuid4().hex[:8]}"
     logger.info("Starting Strix scan %s", scan_id)
 
-    bus = AgentMessageBus()
+    # Caller may pre-create the bus so it can hold a handle (e.g., the
+    # TUI uses it to route stop / chat-input commands). Otherwise we
+    # own the bus internally for the scan's lifetime.
+    if bus is None:
+        bus = AgentMessageBus()
     root_id = uuid.uuid4().hex[:8]
+
+    # Wire SDK tracing into the scan's run-directory ``events.jsonl``.
+    # ``add_trace_processor`` is idempotent at the provider level — if
+    # the user runs multiple scans in one process they each get their
+    # own processor, all writing to their respective run dirs.
+    if tracer is not None:
+        try:
+            run_dir = tracer.get_run_dir() if hasattr(tracer, "get_run_dir") else None
+            if run_dir is not None:
+                add_trace_processor(StrixTracingProcessor(run_dir))
+        except Exception:
+            logger.exception("Failed to register StrixTracingProcessor")
 
     bundle = await session_manager.create_or_reuse(
         scan_id,
@@ -232,10 +252,12 @@ async def run_strix_scan(
             sandbox_token=bundle["bearer"],
             tool_server_host_port=bundle["tool_server_host_port"],
             caido_host_port=bundle["caido_host_port"],
+            caido_capability=bundle.get("capability"),
             agent_id=root_id,
             agent_name="strix",
             parent_id=None,
             tracer=tracer,
+            model=model,
             max_turns=max_turns,
             is_whitebox=is_whitebox,
             diff_scope=diff_scope,
@@ -246,6 +268,7 @@ async def run_strix_scan(
         run_config = make_run_config(
             sandbox_session=bundle["session"],
             sandbox_client=bundle["client"],
+            model=model,
         )
 
         task_text = _build_root_task(scan_config)

@@ -115,7 +115,6 @@ def test_agent_includes_graph_and_sandbox_tools() -> None:
         "web_search",
         "str_replace_editor",
         "create_vulnerability_report",
-        "load_skill",
         "browser_action",
         "terminal_execute",
         "python_action",

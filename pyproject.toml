@@ -35,12 +35,10 @@ classifiers = [
 dependencies = [
   "litellm[proxy]>=1.83.0",
   "openai-agents[litellm]==0.14.6",
-  "tenacity>=9.0.0",
   "pydantic[email]>=2.11.3",
   "rich",
   "docker>=7.1.0",
   "textual>=6.0.0",
-  "xmltodict>=0.13.0",
   "requests>=2.32.0",
   "cvss>=3.2",
   "traceloop-sdk>=0.53.0",
@@ -119,7 +117,6 @@ pretty = true
 [[tool.mypy.overrides]]
 module = [
     "litellm.*",
-    "tenacity.*",
     "numpydoc.*",
     "rich.*",
     "IPython.*",
@@ -294,7 +291,6 @@ ignore = [
 "strix/tools/web_search/tool.py" = ["TC002"]
 "strix/tools/file_edit/tools.py" = ["TC002"]
 "strix/tools/reporting/tool.py" = ["TC002"]
-"strix/tools/load_skill/tool.py" = ["TC002"]
 "strix/tools/finish/tool.py" = ["TC002"]
 "strix/tools/browser/tool.py" = ["TC002"]
 "strix/tools/terminal/tool.py" = ["TC002"]
@@ -420,7 +416,7 @@ force_grid_wrap = 0
 use_parentheses = true
 ensure_newline_before_comments = true
 known_first_party = ["strix"]
-known_third_party = ["fastapi", "pydantic", "litellm", "tenacity"]
+known_third_party = ["fastapi", "pydantic", "litellm"]
 
 # ============================================================================
 # Pytest Configuration

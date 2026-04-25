@@ -1,12 +1,7 @@
-"""Phase 2.4 smoke tests for the remaining local SDK tool wrappers.
+"""Smoke tests for the remaining local SDK tool wrappers.
 
 Covers: web_search, file_edit (str_replace_editor + list_files +
-search_files), reporting (create_vulnerability_report), load_skill,
-finish_scan.
-
-Pattern matches test_sdk_local_tools.py — confirm registration as
-``FunctionTool``, exercise the legacy delegation path, verify that
-sandbox-bound tools route through ``post_to_sandbox``.
+search_files), reporting (create_vulnerability_report), finish_scan.
 """
 
 from __future__ import annotations
@@ -25,7 +20,6 @@ from strix.tools.file_edit.tools import (
     str_replace_editor,
 )
 from strix.tools.finish.tool import finish_scan
-from strix.tools.load_skill.tool import load_skill
 from strix.tools.reporting.tool import create_vulnerability_report
 from strix.tools.web_search.tool import web_search
 
@@ -69,7 +63,6 @@ def test_all_remaining_tools_are_function_tools() -> None:
         list_files,
         search_files,
         create_vulnerability_report,
-        load_skill,
         finish_scan,
     ):
         assert isinstance(tool, FunctionTool)
@@ -238,38 +231,6 @@ async def test_create_vulnerability_report_delegates_to_impl() -> None:
     # Optional params we didn't pass should still be forwarded as None.
     assert kwargs["endpoint"] is None
     assert kwargs["method"] is None
-
-
-# --- load_skill ----------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_load_skill_passes_adapter_with_agent_id() -> None:
-    """The wrapper must build the legacy-shaped adapter from ctx.context."""
-    captured: dict[str, Any] = {}
-
-    def fake_legacy(*, agent_state: Any, skills: str) -> dict[str, Any]:
-        captured["agent_id"] = agent_state.agent_id
-        captured["skills"] = skills
-        return {"success": True, "loaded_skills": ["recon"]}
-
-    with patch(
-        "strix.tools.load_skill.tool._impl.load_skill",
-        side_effect=fake_legacy,
-    ):
-        out = await _invoke(load_skill, _ctx_for("agent-XYZ"), skills="recon")
-
-    assert out["success"] is True
-    assert captured["agent_id"] == "agent-XYZ"
-    assert captured["skills"] == "recon"
-
-
-@pytest.mark.asyncio
-async def test_load_skill_with_empty_input() -> None:
-    """End-to-end: empty skills string yields the legacy validation error."""
-    out = await _invoke(load_skill, _ctx_for(), skills="")
-    assert out["success"] is False
-    assert "No skills" in out["error"]
 
 
 # --- finish_scan ---------------------------------------------------------

@@ -357,6 +357,7 @@ async def create_agent(
         sandbox_token=inner.get("sandbox_token"),
         tool_server_host_port=inner.get("tool_server_host_port"),
         caido_host_port=inner.get("caido_host_port"),
+        caido_capability=inner.get("caido_capability"),
         agent_id=child_id,
         agent_name=name,
         parent_id=parent_id,
