@@ -8,9 +8,7 @@ import os
 from typing import Any
 
 import requests
-from agents import RunContextWrapper
-
-from strix.tools._decorator import strix_tool
+from agents import RunContextWrapper, function_tool
 
 
 _SYSTEM_PROMPT = """You are assisting a cybersecurity agent specialized in vulnerability scanning
@@ -84,7 +82,7 @@ def _do_search(query: str) -> dict[str, Any]:
 
 # Perplexity request timeout is 300s; give the SDK a slightly larger
 # budget so the round-trip + JSON decode doesn't push us over.
-@strix_tool(timeout=330)
+@function_tool(timeout=330)
 async def web_search(ctx: RunContextWrapper, query: str) -> str:
     """Real-time web search via Perplexity — your primary research tool.
 

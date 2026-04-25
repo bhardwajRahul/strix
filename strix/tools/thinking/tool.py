@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import json
 
-from strix.tools._decorator import strix_tool
+from agents import function_tool
 
 
-@strix_tool(timeout=10)
+@function_tool(timeout=10)
 async def think(thought: str) -> str:
     """Record a private chain-of-thought note. No side effects, no new info.
 

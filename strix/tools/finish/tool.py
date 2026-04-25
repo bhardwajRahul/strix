@@ -7,9 +7,7 @@ import json
 import logging
 from typing import Any
 
-from agents import RunContextWrapper
-
-from strix.tools._decorator import strix_tool
+from agents import RunContextWrapper, function_tool
 
 
 logger = logging.getLogger(__name__)
@@ -71,7 +69,7 @@ def _do_finish(
         return {"success": False, "message": f"Failed to complete scan: {e!s}"}
 
 
-@strix_tool(timeout=60)
+@function_tool(timeout=60)
 async def finish_scan(
     ctx: RunContextWrapper,
     executive_summary: str,

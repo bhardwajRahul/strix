@@ -21,9 +21,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from pathlib import Path
 
-from agents import RunContextWrapper
-
-from strix.tools._decorator import dump_tool_result, strix_tool
+from agents import RunContextWrapper, function_tool
 
 
 logger = logging.getLogger(__name__)
@@ -397,7 +395,7 @@ def _delete_note_impl(note_id: str) -> dict[str, Any]:
 # --- public tools ---------------------------------------------------------
 
 
-@strix_tool(timeout=30)
+@function_tool(timeout=30)
 async def create_note(
     ctx: RunContextWrapper,
     title: str,
@@ -437,12 +435,14 @@ async def create_note(
         category: One of the categories above. Default ``"general"``.
         tags: Optional free-form tags.
     """
-    return dump_tool_result(
+    return json.dumps(
         await asyncio.to_thread(_create_note_impl, title, content, category, tags),
+        ensure_ascii=False,
+        default=str,
     )
 
 
-@strix_tool(timeout=30)
+@function_tool(timeout=30)
 async def list_notes(
     ctx: RunContextWrapper,
     category: str | None = None,
@@ -468,7 +468,7 @@ async def list_notes(
         include_content: When False (default) entries have a preview;
             when True the full ``content`` is included.
     """
-    return dump_tool_result(
+    return json.dumps(
         await asyncio.to_thread(
             _list_notes_impl,
             category=category,
@@ -476,20 +476,24 @@ async def list_notes(
             search=search,
             include_content=include_content,
         ),
+        ensure_ascii=False,
+        default=str,
     )
 
 
-@strix_tool(timeout=30)
+@function_tool(timeout=30)
 async def get_note(ctx: RunContextWrapper, note_id: str) -> str:
     """Fetch one note by its 5-char ID. Returns the full content.
 
     Args:
         note_id: Note id from ``create_note`` or a ``list_notes`` entry.
     """
-    return dump_tool_result(await asyncio.to_thread(_get_note_impl, note_id))
+    return json.dumps(
+        await asyncio.to_thread(_get_note_impl, note_id), ensure_ascii=False, default=str
+    )
 
 
-@strix_tool(timeout=30)
+@function_tool(timeout=30)
 async def update_note(
     ctx: RunContextWrapper,
     note_id: str,
@@ -509,7 +513,7 @@ async def update_note(
         content: New content, or ``None`` to keep.
         tags: New tags list, or ``None`` to keep.
     """
-    return dump_tool_result(
+    return json.dumps(
         await asyncio.to_thread(
             _update_note_impl,
             note_id=note_id,
@@ -517,14 +521,18 @@ async def update_note(
             content=content,
             tags=tags,
         ),
+        ensure_ascii=False,
+        default=str,
     )
 
 
-@strix_tool(timeout=30)
+@function_tool(timeout=30)
 async def delete_note(ctx: RunContextWrapper, note_id: str) -> str:
     """Delete a note. For wiki notes, also removes the rendered Markdown file.
 
     Args:
         note_id: Note id to delete.
     """
-    return dump_tool_result(await asyncio.to_thread(_delete_note_impl, note_id))
+    return json.dumps(
+        await asyncio.to_thread(_delete_note_impl, note_id), ensure_ascii=False, default=str
+    )

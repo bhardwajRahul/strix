@@ -144,13 +144,3 @@ async def cleanup(scan_id: str) -> None:
             "cleanup(%s): client.delete raised; container may need manual reaping",
             scan_id,
         )
-
-
-def cached_scan_ids() -> list[str]:
-    """Snapshot of currently-cached scan ids. Used by the TUI / CLI."""
-    return list(_SESSION_CACHE.keys())
-
-
-def _reset_cache_for_tests() -> None:
-    """Test helper — clears the module cache between unit tests."""
-    _SESSION_CACHE.clear()

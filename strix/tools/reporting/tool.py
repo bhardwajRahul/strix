@@ -9,9 +9,7 @@ import re
 from pathlib import PurePosixPath
 from typing import Any
 
-from agents import RunContextWrapper
-
-from strix.tools._decorator import strix_tool
+from agents import RunContextWrapper, function_tool
 
 
 logger = logging.getLogger(__name__)
@@ -293,7 +291,7 @@ def _do_create(  # noqa: PLR0912
 # large scans can have many existing reports to compare against.
 # strict_mode=False because cvss_breakdown is a dict[str, str] and
 # code_locations is list[dict] — both free-form for the strict schema.
-@strix_tool(timeout=180, strict_mode=False)
+@function_tool(timeout=180, strict_mode=False)
 async def create_vulnerability_report(
     ctx: RunContextWrapper,
     title: str,

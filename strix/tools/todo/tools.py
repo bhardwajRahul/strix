@@ -13,9 +13,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from agents import RunContextWrapper
-
-from strix.tools._decorator import dump_tool_result, strix_tool
+from agents import RunContextWrapper, function_tool
 
 
 VALID_PRIORITIES = ["low", "normal", "high", "critical"]
@@ -198,7 +196,7 @@ def _apply_single_update(
 # --- public tools ---------------------------------------------------------
 
 
-@strix_tool(timeout=30)
+@function_tool(timeout=30)
 async def create_todo(
     ctx: RunContextWrapper,
     title: str | None = None,
@@ -248,12 +246,14 @@ async def create_todo(
                 },
             )
         if not tasks:
-            return dump_tool_result(
+            return json.dumps(
                 {
                     "success": False,
                     "error": "Provide a title or 'todos' list to create.",
                     "todo_id": None,
                 },
+                ensure_ascii=False,
+                default=str,
             )
 
         agent_todos = _get_agent_todos(agent_id)
@@ -273,11 +273,13 @@ async def create_todo(
             }
             created.append({"todo_id": todo_id, "title": task["title"], "priority": task_priority})
     except (ValueError, TypeError) as e:
-        return dump_tool_result(
-            {"success": False, "error": f"Failed to create todo: {e}", "todo_id": None}
+        return json.dumps(
+            {"success": False, "error": f"Failed to create todo: {e}", "todo_id": None},
+            ensure_ascii=False,
+            default=str,
         )
 
-    return dump_tool_result(
+    return json.dumps(
         {
             "success": True,
             "created": created,
@@ -285,10 +287,12 @@ async def create_todo(
             "todos": _sorted_todos(agent_id),
             "total_count": len(_get_agent_todos(agent_id)),
         },
+        ensure_ascii=False,
+        default=str,
     )
 
 
-@strix_tool(timeout=30)
+@function_tool(timeout=30)
 async def list_todos(
     ctx: RunContextWrapper,
     status: str | None = None,
@@ -327,7 +331,7 @@ async def list_todos(
             sv = todo.get("status", "pending")
             summary[sv] = summary.get(sv, 0) + 1
     except (ValueError, TypeError) as e:
-        return dump_tool_result(
+        return json.dumps(
             {
                 "success": False,
                 "error": f"Failed to list todos: {e}",
@@ -335,19 +339,23 @@ async def list_todos(
                 "total_count": 0,
                 "summary": {"pending": 0, "in_progress": 0, "done": 0},
             },
+            ensure_ascii=False,
+            default=str,
         )
 
-    return dump_tool_result(
+    return json.dumps(
         {
             "success": True,
             "todos": todos_list,
             "total_count": len(todos_list),
             "summary": summary,
         },
+        ensure_ascii=False,
+        default=str,
     )
 
 
-@strix_tool(timeout=30)
+@function_tool(timeout=30)
 async def update_todo(
     ctx: RunContextWrapper,
     todo_id: str | None = None,
@@ -387,8 +395,10 @@ async def update_todo(
                 },
             )
         if not updates_to_apply:
-            return dump_tool_result(
+            return json.dumps(
                 {"success": False, "error": "Provide todo_id or 'updates' list to update."},
+                ensure_ascii=False,
+                default=str,
             )
 
         updated: list[str] = []
@@ -407,7 +417,7 @@ async def update_todo(
             else:
                 updated.append(upd["todo_id"])
     except (ValueError, TypeError) as e:
-        return dump_tool_result({"success": False, "error": str(e)})
+        return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False, default=str)
 
     response: dict[str, Any] = {
         "success": len(errors) == 0,
@@ -418,7 +428,7 @@ async def update_todo(
     }
     if errors:
         response["errors"] = errors
-    return dump_tool_result(response)
+    return json.dumps(response, ensure_ascii=False, default=str)
 
 
 def _mark(
@@ -437,7 +447,7 @@ def _mark(
             ids.append(todo_id)
         if not ids:
             msg = f"Provide todo_id or todo_ids to mark as {new_status}."
-            return dump_tool_result({"success": False, "error": msg})
+            return json.dumps({"success": False, "error": msg}, ensure_ascii=False, default=str)
 
         marked: list[str] = []
         errors: list[dict[str, Any]] = []
@@ -452,7 +462,7 @@ def _mark(
             todo["updated_at"] = timestamp
             marked.append(tid)
     except (ValueError, TypeError) as e:
-        return dump_tool_result({"success": False, "error": str(e)})
+        return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False, default=str)
 
     key = "marked_done" if new_status == "done" else "marked_pending"
     response: dict[str, Any] = {
@@ -464,10 +474,10 @@ def _mark(
     }
     if errors:
         response["errors"] = errors
-    return dump_tool_result(response)
+    return json.dumps(response, ensure_ascii=False, default=str)
 
 
-@strix_tool(timeout=30)
+@function_tool(timeout=30)
 async def mark_todo_done(
     ctx: RunContextWrapper,
     todo_id: str | None = None,
@@ -488,7 +498,7 @@ async def mark_todo_done(
     )
 
 
-@strix_tool(timeout=30)
+@function_tool(timeout=30)
 async def mark_todo_pending(
     ctx: RunContextWrapper,
     todo_id: str | None = None,
@@ -508,7 +518,7 @@ async def mark_todo_pending(
     )
 
 
-@strix_tool(timeout=30)
+@function_tool(timeout=30)
 async def delete_todo(
     ctx: RunContextWrapper,
     todo_id: str | None = None,
@@ -529,8 +539,10 @@ async def delete_todo(
         if todo_id is not None:
             ids.append(todo_id)
         if not ids:
-            return dump_tool_result(
-                {"success": False, "error": "Provide todo_id or todo_ids to delete."}
+            return json.dumps(
+                {"success": False, "error": "Provide todo_id or todo_ids to delete."},
+                ensure_ascii=False,
+                default=str,
             )
 
         deleted: list[str] = []
@@ -542,7 +554,7 @@ async def delete_todo(
             del agent_todos[tid]
             deleted.append(tid)
     except (ValueError, TypeError) as e:
-        return dump_tool_result({"success": False, "error": str(e)})
+        return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False, default=str)
 
     response: dict[str, Any] = {
         "success": len(errors) == 0,
@@ -553,4 +565,4 @@ async def delete_todo(
     }
     if errors:
         response["errors"] = errors
-    return dump_tool_result(response)
+    return json.dumps(response, ensure_ascii=False, default=str)

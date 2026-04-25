@@ -12,6 +12,7 @@ Tools: ``list_requests``, ``view_request``, ``send_request``,
 from __future__ import annotations
 
 import dataclasses
+import json
 import re
 import time
 from dataclasses import is_dataclass
@@ -19,7 +20,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
-from agents import RunContextWrapper
+from agents import RunContextWrapper, function_tool
 from caido_sdk_client.types import (
     ConnectionInfoInput,
     CreateReplaySessionFromRaw,
@@ -29,8 +30,6 @@ from caido_sdk_client.types import (
     RequestGetOptions,
     UpdateScopeOptions,
 )
-
-from strix.tools._decorator import dump_tool_result, strix_tool
 
 
 if TYPE_CHECKING:
@@ -92,18 +91,20 @@ def _serialize(value: Any) -> Any:
 
 
 def _no_client() -> str:
-    return dump_tool_result(
+    return json.dumps(
         {
             "success": False,
             "error": "Caido client not initialized in context.",
         },
+        ensure_ascii=False,
+        default=str,
     )
 
 
 # ----------------------------------------------------------------------
 # list_requests
 # ----------------------------------------------------------------------
-@strix_tool(timeout=120)
+@function_tool(timeout=120)
 async def list_requests(
     ctx: RunContextWrapper,
     httpql_filter: str | None = None,
@@ -201,7 +202,7 @@ async def list_requests(
                 },
             )
 
-        return dump_tool_result(
+        return json.dumps(
             {
                 "success": True,
                 "entries": entries,
@@ -212,15 +213,21 @@ async def list_requests(
                     "end_cursor": connection.page_info.end_cursor,
                 },
             },
+            ensure_ascii=False,
+            default=str,
         )
     except Exception as exc:  # noqa: BLE001
-        return dump_tool_result({"success": False, "error": f"list_requests failed: {exc}"})
+        return json.dumps(
+            {"success": False, "error": f"list_requests failed: {exc}"},
+            ensure_ascii=False,
+            default=str,
+        )
 
 
 # ----------------------------------------------------------------------
 # view_request
 # ----------------------------------------------------------------------
-@strix_tool(timeout=60)
+@function_tool(timeout=60)
 async def view_request(
     ctx: RunContextWrapper,
     request_id: str,
@@ -265,8 +272,10 @@ async def view_request(
         )
         result = await client.request.get(request_id, opts)
         if result is None:
-            return dump_tool_result(
+            return json.dumps(
                 {"success": False, "error": f"Request {request_id} not found"},
+                ensure_ascii=False,
+                default=str,
             )
 
         raw_bytes = (
@@ -275,20 +284,30 @@ async def view_request(
             else (result.response.raw if result.response is not None else None)
         )
         if raw_bytes is None:
-            return dump_tool_result(
+            return json.dumps(
                 {
                     "success": False,
                     "error": f"No raw {part} for {request_id}",
                 },
+                ensure_ascii=False,
+                default=str,
             )
         content = raw_bytes.decode("utf-8", errors="replace")
 
         if search_pattern:
-            return dump_tool_result(_regex_hits(content, search_pattern))
+            return json.dumps(_regex_hits(content, search_pattern), ensure_ascii=False, default=str)
 
-        return dump_tool_result(_paginate_lines(content, page=page, page_size=page_size))
+        return json.dumps(
+            _paginate_lines(content, page=page, page_size=page_size),
+            ensure_ascii=False,
+            default=str,
+        )
     except Exception as exc:  # noqa: BLE001
-        return dump_tool_result({"success": False, "error": f"view_request failed: {exc}"})
+        return json.dumps(
+            {"success": False, "error": f"view_request failed: {exc}"},
+            ensure_ascii=False,
+            default=str,
+        )
 
 
 def _regex_hits(content: str, pattern: str) -> dict[str, Any]:
@@ -333,7 +352,7 @@ def _paginate_lines(content: str, *, page: int, page_size: int) -> dict[str, Any
 # ----------------------------------------------------------------------
 # send_request
 # ----------------------------------------------------------------------
-@strix_tool(timeout=120, strict_mode=False)
+@function_tool(timeout=120, strict_mode=False)
 async def send_request(
     ctx: RunContextWrapper,
     method: str,
@@ -367,13 +386,17 @@ async def send_request(
         )
         return await _replay_send(client, raw=raw, connection=connection)
     except Exception as exc:  # noqa: BLE001
-        return dump_tool_result({"success": False, "error": f"send_request failed: {exc}"})
+        return json.dumps(
+            {"success": False, "error": f"send_request failed: {exc}"},
+            ensure_ascii=False,
+            default=str,
+        )
 
 
 # ----------------------------------------------------------------------
 # repeat_request
 # ----------------------------------------------------------------------
-@strix_tool(timeout=120, strict_mode=False)
+@function_tool(timeout=120, strict_mode=False)
 async def repeat_request(
     ctx: RunContextWrapper,
     request_id: str,
@@ -412,8 +435,10 @@ async def repeat_request(
     try:
         result = await client.request.get(request_id, RequestGetOptions(request_raw=True))
         if result is None or result.request.raw is None:
-            return dump_tool_result(
+            return json.dumps(
                 {"success": False, "error": f"Request {request_id} not found"},
+                ensure_ascii=False,
+                default=str,
             )
 
         original = result.request
@@ -429,13 +454,17 @@ async def repeat_request(
         )
         return await _replay_send(client, raw=raw, connection=connection)
     except Exception as exc:  # noqa: BLE001
-        return dump_tool_result({"success": False, "error": f"repeat_request failed: {exc}"})
+        return json.dumps(
+            {"success": False, "error": f"repeat_request failed: {exc}"},
+            ensure_ascii=False,
+            default=str,
+        )
 
 
 # ----------------------------------------------------------------------
 # scope_rules
 # ----------------------------------------------------------------------
-@strix_tool(timeout=60)
+@function_tool(timeout=60)
 async def scope_rules(
     ctx: RunContextWrapper,
     action: ScopeAction,
@@ -488,20 +517,28 @@ async def scope_rules(
     try:
         if action == "list":
             scopes = await client.scope.list()
-            return dump_tool_result(
+            return json.dumps(
                 {"success": True, "scopes": [_serialize(s) for s in scopes]},
+                ensure_ascii=False,
+                default=str,
             )
         if action == "get":
             if not scope_id:
-                return dump_tool_result(
+                return json.dumps(
                     {"success": False, "error": "scope_id required for get"},
+                    ensure_ascii=False,
+                    default=str,
                 )
             scope = await client.scope.get(scope_id)
-            return dump_tool_result({"success": True, "scope": _serialize(scope)})
+            return json.dumps(
+                {"success": True, "scope": _serialize(scope)}, ensure_ascii=False, default=str
+            )
         if action == "create":
             if not scope_name:
-                return dump_tool_result(
+                return json.dumps(
                     {"success": False, "error": "scope_name required for create"},
+                    ensure_ascii=False,
+                    default=str,
                 )
             scope = await client.scope.create(
                 CreateScopeOptions(
@@ -510,14 +547,18 @@ async def scope_rules(
                     denylist=list(denylist or []),
                 ),
             )
-            return dump_tool_result({"success": True, "scope": _serialize(scope)})
+            return json.dumps(
+                {"success": True, "scope": _serialize(scope)}, ensure_ascii=False, default=str
+            )
         if action == "update":
             if not scope_id or not scope_name:
-                return dump_tool_result(
+                return json.dumps(
                     {
                         "success": False,
                         "error": "scope_id and scope_name required for update",
                     },
+                    ensure_ascii=False,
+                    default=str,
                 )
             scope = await client.scope.update(
                 scope_id,
@@ -527,16 +568,24 @@ async def scope_rules(
                     denylist=list(denylist or []),
                 ),
             )
-            return dump_tool_result({"success": True, "scope": _serialize(scope)})
+            return json.dumps(
+                {"success": True, "scope": _serialize(scope)}, ensure_ascii=False, default=str
+            )
         # action == "delete" — exhaustive Literal
         if not scope_id:
-            return dump_tool_result(
+            return json.dumps(
                 {"success": False, "error": "scope_id required for delete"},
+                ensure_ascii=False,
+                default=str,
             )
         await client.scope.delete(scope_id)
-        return dump_tool_result({"success": True, "deleted": scope_id})
+        return json.dumps({"success": True, "deleted": scope_id}, ensure_ascii=False, default=str)
     except Exception as exc:  # noqa: BLE001
-        return dump_tool_result({"success": False, "error": f"scope_rules failed: {exc}"})
+        return json.dumps(
+            {"success": False, "error": f"scope_rules failed: {exc}"},
+            ensure_ascii=False,
+            default=str,
+        )
 
 
 # ----------------------------------------------------------------------
@@ -670,7 +719,7 @@ async def _replay_send(
             "raw": response_raw.decode("utf-8", errors="replace"),
         }
 
-    return dump_tool_result(
+    return json.dumps(
         {
             "success": result.status == "DONE",
             "status": result.status,
@@ -679,4 +728,6 @@ async def _replay_send(
             "elapsed_ms": elapsed_ms,
             "response": response,
         },
+        ensure_ascii=False,
+        default=str,
     )
