@@ -26,7 +26,7 @@ from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-ReasoningEffort = Literal["low", "medium", "high"]
+ReasoningEffort = Literal["none", "minimal", "low", "medium", "high", "xhigh"]
 
 _BASE_CONFIG = SettingsConfigDict(
     case_sensitive=False,

@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any
 
 from agents.model_settings import ModelSettings
 from openai.types.shared import Reasoning
 
 from strix.config.models import DEFAULT_MODEL_RETRY
+
+
+if TYPE_CHECKING:
+    from strix.config.settings import ReasoningEffort
 
 
 # Default max_turns budget passed to the SDK runner.
@@ -106,7 +110,7 @@ def build_scope_context(scan_config: dict[str, Any]) -> dict[str, Any]:
 
 
 def make_model_settings(
-    reasoning_effort: Literal["low", "medium", "high"] | None,
+    reasoning_effort: ReasoningEffort | None,
 ) -> ModelSettings:
     model_settings = ModelSettings(
         parallel_tool_calls=False,
