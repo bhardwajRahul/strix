@@ -20,7 +20,7 @@ from typing import Any, Literal
 
 from agents import RunContextWrapper, function_tool
 
-from strix.orchestration.coordinator import coordinator_from_context
+from strix.core.agents import coordinator_from_context
 
 
 logger = logging.getLogger(__name__)

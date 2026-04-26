@@ -217,22 +217,20 @@ ignore = [
 "strix/agents/factory.py" = ["TC002"]
 # Entry point: ``Path`` is used at runtime by the typing of the
 # session_manager call; importing under TYPE_CHECKING would defer
-# resolution past where mypy needs it. ``build_root_task`` legitimately
-# walks every supported target type — splitting it into per-type
-# helpers would add indirection without simplifying anything.
-"strix/orchestration/runner.py" = ["TC003", "PLR0912", "PLR0915", "PLC0415"]
-# ScanStore carries scan artifact/report fields, artifact rendering, and
+# resolution past where mypy needs it.
+"strix/core/runner.py" = ["TC003", "PLR0912", "PLR0915", "PLC0415"]
+# ReportState carries scan artifact/report fields and
 # a runtime ``Callable`` annotation on ``vulnerability_found_callback``.
-"strix/telemetry/scan_store.py" = ["TC003", "PLR0912", "PLR0915", "E501", "PERF401"]
+"strix/report/state.py" = ["TC003", "PLR0912", "PLR0915", "E501", "PERF401"]
 # Interface utility branches per scope-mode / target-type combination;
 # splitting would obscure the decision tree without simplifying it.
 "strix/interface/utils.py" = ["PLR0912", "BLE001", "PLC0415"]
 # CLI / TUI / main keep extensive lazy imports + broad exception
 # swallows for resilience around terminal-rendering errors.
 "strix/interface/cli.py" = ["BLE001", "PLC0415"]
-"strix/interface/tui.py" = ["BLE001", "PLC0415", "PLR0912", "PLR0915", "SIM105"]
+"strix/interface/tui/app.py" = ["BLE001", "PLC0415", "PLR0912", "PLR0915", "SIM105"]
 "strix/interface/main.py" = ["BLE001", "PLC0415", "PLR0912", "PLR0915"]
-"strix/interface/tool_components/agent_message_renderer.py" = ["PLC0415"]
+"strix/interface/tui/renderers/agent_message_renderer.py" = ["PLC0415"]
 
 [tool.ruff.lint.isort]
 force-single-line = false

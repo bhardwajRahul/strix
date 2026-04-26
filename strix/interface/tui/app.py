@@ -2,14 +2,11 @@ import argparse
 import asyncio
 import atexit
 import contextlib
-import json
 import logging
 import signal
-import sqlite3
 import sys
 import threading
 from collections.abc import Callable
-from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as pkg_version
 from pathlib import Path
@@ -34,13 +31,15 @@ from textual.widgets import Button, Label, Static, TextArea, Tree
 from textual.widgets.tree import TreeNode
 
 from strix.config import load_settings
-from strix.interface.tool_components import render_tool_widget
-from strix.interface.tool_components.agent_message_renderer import AgentMessageRenderer
-from strix.interface.tool_components.user_message_renderer import UserMessageRenderer
+from strix.core.runner import run_strix_scan
+from strix.interface.tui.live_view import TuiLiveView
+from strix.interface.tui.messages import send_user_message_to_agent
+from strix.interface.tui.renderers import render_tool_widget
+from strix.interface.tui.renderers.agent_message_renderer import AgentMessageRenderer
+from strix.interface.tui.renderers.user_message_renderer import UserMessageRenderer
 from strix.interface.utils import build_tui_stats_text
-from strix.orchestration.runner import run_strix_scan
+from strix.report.state import ReportState, set_global_report_state
 from strix.runtime import session_manager
-from strix.telemetry.scan_store import ScanStore, set_global_scan_store
 
 
 logger = logging.getLogger(__name__)
@@ -643,386 +642,6 @@ class VulnerabilitiesPanel(VerticalScroll):  # type: ignore[misc]
             self.mount(item)
 
 
-class TuiLiveView:
-    """UI-owned projection of agent state plus SDK stream events."""
-
-    def __init__(self) -> None:
-        self.agents: dict[str, dict[str, Any]] = {}
-        self.events: list[dict[str, Any]] = []
-        self._next_event_id = 1
-        self._open_assistant_event_by_agent: dict[str, dict[str, Any]] = {}
-        self._tool_event_by_call_id: dict[str, dict[str, Any]] = {}
-
-    def hydrate_from_run_dir(self, run_dir: Path) -> None:
-        agents_path = run_dir / "agents.json"
-        if not agents_path.exists():
-            return
-        try:
-            agents_data = json.loads(agents_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return
-        statuses = agents_data.get("statuses") or {}
-        names = agents_data.get("names") or {}
-        parent_of = agents_data.get("parent_of") or {}
-        if not isinstance(statuses, dict):
-            return
-        for agent_id, status in statuses.items():
-            if not isinstance(agent_id, str):
-                continue
-            self.upsert_agent(
-                agent_id,
-                name=names.get(agent_id, agent_id) if isinstance(names, dict) else agent_id,
-                parent_id=parent_of.get(agent_id) if isinstance(parent_of, dict) else None,
-                status=str(status),
-            )
-        self._hydrate_sdk_session_history(run_dir, statuses.keys())
-
-    def _hydrate_sdk_session_history(self, run_dir: Path, agent_ids: Any) -> None:
-        agents_db = run_dir / "agents.db"
-        session_ids = [aid for aid in agent_ids if isinstance(aid, str)]
-        if not agents_db.exists() or not session_ids:
-            return
-        session_id_set = set(session_ids)
-        try:
-            with sqlite3.connect(agents_db) as conn:
-                rows = conn.execute(
-                    "select id, session_id, message_data, created_at "
-                    "from agent_messages order by id"
-                ).fetchall()
-        except sqlite3.Error:
-            logger.exception("Failed to hydrate TUI history from %s", agents_db)
-            return
-
-        for row_id, agent_id, message_data, created_at in rows:
-            if agent_id not in session_id_set:
-                continue
-            try:
-                item = json.loads(message_data)
-            except (TypeError, json.JSONDecodeError):
-                logger.debug("Skipping unreadable SDK session item %s for %s", row_id, agent_id)
-                continue
-            if not isinstance(item, dict):
-                continue
-            self._ingest_session_history_item(
-                str(agent_id),
-                item,
-                timestamp=_sqlite_timestamp_to_iso(created_at),
-            )
-
-    def upsert_agent(
-        self,
-        agent_id: str,
-        *,
-        name: str | None = None,
-        parent_id: str | None = None,
-        status: str | None = None,
-        error_message: str | None = None,
-    ) -> None:
-        now = datetime.now(UTC).isoformat()
-        current = self.agents.setdefault(
-            agent_id,
-            {
-                "id": agent_id,
-                "name": name or agent_id,
-                "parent_id": parent_id,
-                "status": status or "running",
-                "created_at": now,
-                "updated_at": now,
-            },
-        )
-        if name is not None:
-            current["name"] = name
-        if parent_id is not None or "parent_id" not in current:
-            current["parent_id"] = parent_id
-        if status is not None:
-            current["status"] = status
-        if error_message:
-            current["error_message"] = error_message
-        current["updated_at"] = now
-
-    def record_user_message(self, agent_id: str, content: str) -> None:
-        self._append_event(
-            agent_id,
-            "chat",
-            {
-                "role": "user",
-                "content": content,
-                "metadata": {"source": "tui_user"},
-            },
-        )
-
-    def ingest_sdk_event(self, agent_id: str, event: Any) -> None:
-        event_type = getattr(event, "type", "")
-        if event_type == "raw_response_event":
-            self._ingest_raw_response_event(agent_id, getattr(event, "data", None))
-            return
-        if event_type != "run_item_stream_event":
-            return
-
-        item = getattr(event, "item", None)
-        item_type = getattr(item, "type", "")
-        if item_type == "message_output_item":
-            self._record_assistant_message(agent_id, _sdk_message_text(item), final=True)
-        elif item_type == "tool_call_item":
-            self._record_tool_call(agent_id, item)
-        elif item_type == "tool_call_output_item":
-            self._record_tool_output(agent_id, item)
-
-    def events_for_agent(self, agent_id: str) -> list[dict[str, Any]]:
-        return [event for event in self.events if event.get("agent_id") == agent_id]
-
-    def has_events_for_agent(self, agent_id: str) -> bool:
-        return any(event.get("agent_id") == agent_id for event in self.events)
-
-    def _ingest_raw_response_event(self, agent_id: str, data: Any) -> None:
-        data_type = getattr(data, "type", "")
-        if data_type == "response.output_text.delta":
-            delta = getattr(data, "delta", "")
-            if delta:
-                self._record_assistant_message(agent_id, str(delta), final=False)
-
-    def _ingest_session_history_item(
-        self,
-        agent_id: str,
-        item: dict[str, Any],
-        *,
-        timestamp: str,
-    ) -> None:
-        item_type = item.get("type")
-        role = item.get("role")
-        if role in {"user", "assistant"} and (item_type in {None, "message"}):
-            content = _session_message_text(item)
-            if content:
-                self._append_event(
-                    agent_id,
-                    "chat",
-                    {
-                        "role": role,
-                        "content": content,
-                        "metadata": {"source": "sdk_session"},
-                    },
-                    timestamp=timestamp,
-                )
-            return
-
-        if item_type == "function_call":
-            self._record_tool_call_data(
-                agent_id,
-                {
-                    "call_id": str(item.get("call_id") or item.get("id") or ""),
-                    "tool_name": str(item.get("name") or "tool"),
-                    "args": _parse_json_object(item.get("arguments")),
-                },
-                timestamp=timestamp,
-            )
-            return
-
-        if item_type == "function_call_output":
-            self._record_tool_output_data(
-                agent_id,
-                {
-                    "call_id": str(item.get("call_id") or item.get("id") or ""),
-                    "tool_name": "tool",
-                    "output": item.get("output"),
-                },
-                timestamp=timestamp,
-            )
-
-    def _record_assistant_message(self, agent_id: str, content: str, *, final: bool) -> None:
-        if not content:
-            return
-        existing = self._open_assistant_event_by_agent.get(agent_id)
-        if existing is None:
-            event = self._append_event(
-                agent_id,
-                "chat",
-                {
-                    "role": "assistant",
-                    "content": content,
-                    "metadata": {"source": "sdk_stream", "streaming": not final},
-                },
-            )
-            if not final:
-                self._open_assistant_event_by_agent[agent_id] = event
-            return
-
-        data = existing["data"]
-        if final:
-            data["content"] = content
-            data["metadata"]["streaming"] = False
-            self._open_assistant_event_by_agent.pop(agent_id, None)
-        else:
-            data["content"] = f"{data.get('content', '')}{content}"
-        self._bump_event(existing)
-
-    def _record_tool_call(self, agent_id: str, item: Any) -> None:
-        self._record_tool_call_data(agent_id, _sdk_tool_call_data(item))
-
-    def _record_tool_call_data(
-        self,
-        agent_id: str,
-        call: dict[str, Any],
-        *,
-        timestamp: str | None = None,
-    ) -> None:
-        call_id = call["call_id"]
-        existing = self._tool_event_by_call_id.get(call_id)
-        tool_data = {
-            "tool_name": call["tool_name"],
-            "args": call["args"],
-            "status": "running",
-            "agent_id": agent_id,
-            "call_id": call_id,
-        }
-        if existing is None:
-            event = self._append_event(agent_id, "tool", tool_data, timestamp=timestamp)
-            self._tool_event_by_call_id[call_id] = event
-        else:
-            existing["data"].update(tool_data)
-            self._bump_event(existing, timestamp=timestamp)
-
-    def _record_tool_output(self, agent_id: str, item: Any) -> None:
-        self._record_tool_output_data(agent_id, _sdk_tool_output_data(item))
-
-    def _record_tool_output_data(
-        self,
-        agent_id: str,
-        output: dict[str, Any],
-        *,
-        timestamp: str | None = None,
-    ) -> None:
-        call_id = output["call_id"]
-        event = self._tool_event_by_call_id.get(call_id)
-        if event is None:
-            event = self._append_event(
-                agent_id,
-                "tool",
-                {
-                    "tool_name": output["tool_name"],
-                    "args": {},
-                    "status": "completed",
-                    "agent_id": agent_id,
-                    "call_id": call_id,
-                },
-                timestamp=timestamp,
-            )
-            self._tool_event_by_call_id[call_id] = event
-
-        result = _parse_json_value(output["output"])
-        event["data"]["result"] = result
-        event["data"]["status"] = _tool_status_from_result(result)
-        self._bump_event(event, timestamp=timestamp)
-
-    def _append_event(
-        self,
-        agent_id: str,
-        event_type: str,
-        data: dict[str, Any],
-        *,
-        timestamp: str | None = None,
-    ) -> dict[str, Any]:
-        event = {
-            "id": f"{event_type}_{self._next_event_id}",
-            "type": event_type,
-            "agent_id": agent_id,
-            "timestamp": timestamp or datetime.now(UTC).isoformat(),
-            "version": 0,
-            "data": data,
-        }
-        self._next_event_id += 1
-        self.events.append(event)
-        return event
-
-    @staticmethod
-    def _bump_event(event: dict[str, Any], *, timestamp: str | None = None) -> None:
-        event["version"] = int(event.get("version", 0)) + 1
-        event["timestamp"] = timestamp or datetime.now(UTC).isoformat()
-
-
-def _sdk_tool_call_data(item: Any) -> dict[str, Any]:
-    raw = getattr(item, "raw_item", None)
-    call_id = str(_raw_field(raw, "call_id") or _raw_field(raw, "id") or id(item))
-    tool_name = str(
-        _raw_field(raw, "name") or _raw_field(raw, "type") or getattr(item, "title", None) or "tool"
-    )
-    return {
-        "call_id": call_id,
-        "tool_name": tool_name,
-        "args": _parse_json_object(_raw_field(raw, "arguments")),
-    }
-
-
-def _sdk_tool_output_data(item: Any) -> dict[str, Any]:
-    raw = getattr(item, "raw_item", None)
-    call_id = str(_raw_field(raw, "call_id") or _raw_field(raw, "id") or id(item))
-    return {
-        "call_id": call_id,
-        "tool_name": str(_raw_field(raw, "name") or _raw_field(raw, "type") or "tool"),
-        "output": getattr(item, "output", _raw_field(raw, "output")),
-    }
-
-
-def _sdk_message_text(item: Any) -> str:
-    raw = getattr(item, "raw_item", None)
-    return _message_content_text(_raw_field(raw, "content", []))
-
-
-def _session_message_text(item: dict[str, Any]) -> str:
-    return _message_content_text(item.get("content", ""))
-
-
-def _message_content_text(content: Any) -> str:
-    parts: list[str] = []
-    content_items = content if isinstance(content, list) else [content]
-    for part in content_items:
-        if isinstance(part, str):
-            parts.append(part)
-            continue
-        text = _raw_field(part, "text")
-        if isinstance(text, str):
-            parts.append(text)
-    return "".join(parts)
-
-
-def _raw_field(raw: Any, key: str, default: Any = None) -> Any:
-    if isinstance(raw, dict):
-        return raw.get(key, default)
-    return getattr(raw, key, default)
-
-
-def _parse_json_object(value: Any) -> dict[str, Any]:
-    parsed = _parse_json_value(value)
-    return parsed if isinstance(parsed, dict) else {}
-
-
-def _parse_json_value(value: Any) -> Any:
-    if not isinstance(value, str):
-        return value
-    try:
-        return json.loads(value)
-    except json.JSONDecodeError:
-        return value
-
-
-def _tool_status_from_result(result: Any) -> str:
-    if isinstance(result, dict) and result.get("success") is False:
-        return "failed"
-    return "completed"
-
-
-def _sqlite_timestamp_to_iso(value: Any) -> str:
-    if not isinstance(value, str) or not value.strip():
-        return datetime.now(UTC).isoformat()
-    text = value.strip()
-    try:
-        parsed = datetime.fromisoformat(text)
-    except ValueError:
-        return text
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=UTC)
-    return parsed.astimezone(UTC).isoformat()
-
-
 class QuitScreen(ModalScreen):  # type: ignore[misc]
     def compose(self) -> ComposeResult:
         yield Grid(
@@ -1068,7 +687,7 @@ class QuitScreen(ModalScreen):  # type: ignore[misc]
 
 
 class StrixTUIApp(App):  # type: ignore[misc]
-    CSS_PATH = "assets/tui_styles.tcss"
+    CSS_PATH = str(Path(__file__).resolve().parent.parent / "assets" / "tui_styles.tcss")
     ALLOW_SELECT = True
 
     SIDEBAR_MIN_WIDTH = 120
@@ -1088,17 +707,17 @@ class StrixTUIApp(App):  # type: ignore[misc]
         self.args = args
         self.scan_config = self._build_scan_config(args)
 
-        self.scan_store = ScanStore(self.scan_config["run_name"])
+        self.scan_store = ReportState(self.scan_config["run_name"])
         self.scan_store.set_scan_config(self.scan_config)
         self.scan_store.hydrate_from_run_dir()
-        set_global_scan_store(self.scan_store)
+        set_global_report_state(self.scan_store)
         self.live_view = TuiLiveView()
         self.live_view.hydrate_from_run_dir(self.scan_store.get_run_dir())
         self._agent_graph_sync_future: Any | None = None
 
         # Pre-create the coordinator here so the TUI can route stop/chat
         # commands while the scan loop runs in a worker thread.
-        from strix.orchestration.coordinator import AgentCoordinator
+        from strix.core.agents import AgentCoordinator
 
         self.coordinator = AgentCoordinator()
 
@@ -1991,18 +1610,14 @@ class StrixTUIApp(App):  # type: ignore[misc]
             len(message),
         )
         target_agent_id = self.selected_agent_id
-        self.live_view.record_user_message(target_agent_id, message)
 
-        # Route to the agent's SDK session. The coordinator also interrupts
-        # any active stream so the message is picked up on the next run cycle.
-        if self._scan_loop is not None and not self._scan_loop.is_closed():
-            asyncio.run_coroutine_threadsafe(
-                self.coordinator.send(
-                    target_agent_id,
-                    {"from": "user", "content": message, "type": "instruction"},
-                ),
-                self._scan_loop,
-            )
+        send_user_message_to_agent(
+            coordinator=self.coordinator,
+            loop=self._scan_loop,
+            live_view=self.live_view,
+            target_agent_id=target_agent_id,
+            message=message,
+        )
 
         self._displayed_events.clear()
         self._update_chat_view()

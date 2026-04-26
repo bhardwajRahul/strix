@@ -11,7 +11,7 @@ from strix.config import load_settings
 
 
 if TYPE_CHECKING:
-    from strix.telemetry.scan_store import ScanStore
+    from strix.report.state import ReportState
 
 
 logger = logging.getLogger(__name__)
@@ -114,7 +114,7 @@ def finding(severity: str) -> None:
     )
 
 
-def end(scan_store: "ScanStore", exit_reason: str = "completed") -> None:
+def end(scan_store: "ReportState", exit_reason: str = "completed") -> None:
     vulnerabilities_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
     for v in scan_store.vulnerability_reports:
         sev = v.get("severity", "info").lower()

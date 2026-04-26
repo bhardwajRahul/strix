@@ -1,4 +1,4 @@
-"""SDK-native coordinator for Strix's addressable agent graph.
+"""SDK-native state for Strix's addressable agent graph.
 
 The Agents SDK owns model/tool execution and per-agent conversation
 history. Strix owns only product semantics the SDK does not provide:

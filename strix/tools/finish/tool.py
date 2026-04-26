@@ -9,7 +9,7 @@ from typing import Any
 
 from agents import RunContextWrapper, function_tool
 
-from strix.orchestration.coordinator import coordinator_from_context
+from strix.core.agents import coordinator_from_context
 
 
 logger = logging.getLogger(__name__)
@@ -44,9 +44,9 @@ def _do_finish(
         return {"success": False, "message": "Validation failed", "errors": errors}
 
     try:
-        from strix.telemetry.scan_store import get_global_scan_store
+        from strix.report.state import get_global_report_state
 
-        scan_store = get_global_scan_store()
+        scan_store = get_global_report_state()
         if scan_store is None:
             logger.warning("No global scan store; scan results not persisted")
             return {

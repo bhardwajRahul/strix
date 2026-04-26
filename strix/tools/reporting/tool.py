@@ -214,9 +214,9 @@ async def _do_create(  # noqa: PLR0912
     cvss_score, severity, _vector = _calculate_cvss(cvss_breakdown)
 
     try:
-        from strix.telemetry.scan_store import get_global_scan_store
+        from strix.report.state import get_global_report_state
 
-        scan_store = get_global_scan_store()
+        scan_store = get_global_report_state()
         if scan_store is None:
             logger.warning("No global scan store; vulnerability report not persisted")
             return {

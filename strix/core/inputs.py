@@ -1,4 +1,4 @@
-"""Pure helper builders for Strix scan orchestration."""
+"""Pure input builders for Strix scan runs."""
 
 from __future__ import annotations
 

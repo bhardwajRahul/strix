@@ -13,9 +13,9 @@ from rich.panel import Panel
 from rich.text import Text
 
 from strix.config import load_settings
-from strix.orchestration.runner import run_strix_scan
+from strix.core.runner import run_strix_scan
+from strix.report.state import ReportState, set_global_report_state
 from strix.runtime import session_manager
-from strix.telemetry.scan_store import ScanStore, set_global_scan_store
 
 from .utils import (
     build_live_stats_text,
@@ -95,7 +95,7 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
         "resume_instruction": getattr(args, "user_explicit_instruction", None) or "",
     }
 
-    scan_store = ScanStore(args.run_name)
+    scan_store = ReportState(args.run_name)
     scan_store.set_scan_config(scan_config)
     scan_store.hydrate_from_run_dir()
 
@@ -130,7 +130,7 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
     if hasattr(signal, "SIGHUP"):
         signal.signal(signal.SIGHUP, signal_handler)
 
-    set_global_scan_store(scan_store)
+    set_global_report_state(scan_store)
 
     def create_live_status() -> Panel:
         status_text = Text()

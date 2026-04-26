@@ -1,32 +1,30 @@
-import csv
 import json
 import logging
-import tempfile
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Optional
 from uuid import uuid4
 
+from strix.report.writer import write_executive_report, write_run_metadata, write_vulnerabilities
 from strix.telemetry import posthog
 
 
 logger = logging.getLogger(__name__)
 
-_global_scan_store: Optional["ScanStore"] = None
-_SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
+_global_report_state: Optional["ReportState"] = None
 
 
-def get_global_scan_store() -> Optional["ScanStore"]:
-    return _global_scan_store
+def get_global_report_state() -> Optional["ReportState"]:
+    return _global_report_state
 
 
-def set_global_scan_store(scan_store: "ScanStore") -> None:
-    global _global_scan_store  # noqa: PLW0603
-    _global_scan_store = scan_store
+def set_global_report_state(report_state: "ReportState") -> None:
+    global _global_report_state  # noqa: PLW0603
+    _global_report_state = report_state
 
 
-class ScanStore:
+class ReportState:
     """Per-scan product artifact state plus artifact writer.
 
     The Agents SDK owns model/tool execution, tracing, and conversation
@@ -280,168 +278,13 @@ class ScanStore:
             run_dir.mkdir(parents=True, exist_ok=True)
 
             if self.final_scan_result:
-                self._write_executive_report(run_dir)
+                write_executive_report(run_dir, self.final_scan_result)
 
             if self.vulnerability_reports:
-                self._write_vulnerabilities(run_dir)
+                write_vulnerabilities(run_dir, self.vulnerability_reports, self._saved_vuln_ids)
 
-            _atomic_write_text(
-                run_dir / "run_metadata.json",
-                json.dumps(self.run_metadata, ensure_ascii=False, indent=2, default=str),
-            )
+            write_run_metadata(run_dir, self.run_metadata)
 
             logger.info("Essential scan data saved to: %s", run_dir)
         except (OSError, RuntimeError):
             logger.exception("Failed to save scan data")
-
-    def _write_executive_report(self, run_dir: Path) -> None:
-        path = run_dir / "penetration_test_report.md"
-        with path.open("w", encoding="utf-8") as f:
-            f.write("# Security Penetration Test Report\n\n")
-            f.write(f"**Generated:** {datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S UTC')}\n\n")
-            f.write(f"{self.final_scan_result}\n")
-        logger.info("Saved final penetration test report to: %s", path)
-
-    def _write_vulnerabilities(self, run_dir: Path) -> None:
-        vuln_dir = run_dir / "vulnerabilities"
-        vuln_dir.mkdir(exist_ok=True)
-
-        new_reports = [r for r in self.vulnerability_reports if r["id"] not in self._saved_vuln_ids]
-
-        for report in new_reports:
-            (vuln_dir / f"{report['id']}.md").write_text(
-                _render_vulnerability_md(report),
-                encoding="utf-8",
-            )
-            self._saved_vuln_ids.add(report["id"])
-
-        sorted_reports = sorted(
-            self.vulnerability_reports,
-            key=lambda r: (_SEVERITY_ORDER.get(r["severity"], 5), r["timestamp"]),
-        )
-        csv_path = run_dir / "vulnerabilities.csv"
-        with csv_path.open("w", encoding="utf-8", newline="") as f:
-            fieldnames = ["id", "title", "severity", "timestamp", "file"]
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-            writer.writeheader()
-            for report in sorted_reports:
-                writer.writerow(
-                    {
-                        "id": report["id"],
-                        "title": report["title"],
-                        "severity": report["severity"].upper(),
-                        "timestamp": report["timestamp"],
-                        "file": f"vulnerabilities/{report['id']}.md",
-                    },
-                )
-
-        _atomic_write_text(
-            run_dir / "vulnerabilities.json",
-            json.dumps(self.vulnerability_reports, ensure_ascii=False, indent=2, default=str),
-        )
-
-        if new_reports:
-            logger.info(
-                "Saved %d new vulnerability report(s) to: %s",
-                len(new_reports),
-                vuln_dir,
-            )
-        logger.info("Updated vulnerability index: %s", csv_path)
-
-
-def _atomic_write_text(path: Path, payload: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(
-        mode="w",
-        encoding="utf-8",
-        dir=str(path.parent),
-        prefix=f".{path.name}.",
-        suffix=".tmp",
-        delete=False,
-    ) as tmp:
-        tmp.write(payload)
-        tmp_path = Path(tmp.name)
-    tmp_path.replace(path)
-
-
-def _render_vulnerability_md(report: dict[str, Any]) -> str:
-    lines: list[str] = [
-        f"# {report.get('title', 'Untitled Vulnerability')}\n",
-        f"**ID:** {report.get('id', 'unknown')}",
-        f"**Severity:** {report.get('severity', 'unknown').upper()}",
-        f"**Found:** {report.get('timestamp', 'unknown')}",
-    ]
-
-    metadata: list[tuple[str, Any]] = [
-        ("Target", report.get("target")),
-        ("Endpoint", report.get("endpoint")),
-        ("Method", report.get("method")),
-        ("CVE", report.get("cve")),
-        ("CWE", report.get("cwe")),
-    ]
-    cvss = report.get("cvss")
-    if cvss is not None:
-        metadata.append(("CVSS", cvss))
-    for label, value in metadata:
-        if value:
-            lines.append(f"**{label}:** {value}")
-
-    lines.append("")
-    lines.append("## Description\n")
-    lines.append(report.get("description") or "No description provided.")
-    lines.append("")
-
-    if report.get("impact"):
-        lines.append("## Impact\n")
-        lines.append(str(report["impact"]))
-        lines.append("")
-
-    if report.get("technical_analysis"):
-        lines.append("## Technical Analysis\n")
-        lines.append(str(report["technical_analysis"]))
-        lines.append("")
-
-    if report.get("poc_description") or report.get("poc_script_code"):
-        lines.append("## Proof of Concept\n")
-        if report.get("poc_description"):
-            lines.append(str(report["poc_description"]))
-            lines.append("")
-        if report.get("poc_script_code"):
-            lines.append("```")
-            lines.append(str(report["poc_script_code"]))
-            lines.append("```")
-            lines.append("")
-
-    if report.get("code_locations"):
-        lines.append("## Code Analysis\n")
-        for i, loc in enumerate(report["code_locations"]):
-            file_ref = loc.get("file", "unknown")
-            line_ref = ""
-            if loc.get("start_line") is not None:
-                if loc.get("end_line") and loc["end_line"] != loc["start_line"]:
-                    line_ref = f" (lines {loc['start_line']}-{loc['end_line']})"
-                else:
-                    line_ref = f" (line {loc['start_line']})"
-            lines.append(f"**Location {i + 1}:** `{file_ref}`{line_ref}")
-            if loc.get("label"):
-                lines.append(f"  {loc['label']}")
-            if loc.get("snippet"):
-                lines.append(f"  ```\n  {loc['snippet']}\n  ```")
-            if loc.get("fix_before") or loc.get("fix_after"):
-                lines.append("\n  **Suggested Fix:**")
-                lines.append("```diff")
-                if loc.get("fix_before"):
-                    for ln in str(loc["fix_before"]).splitlines():
-                        lines.append(f"- {ln}")
-                if loc.get("fix_after"):
-                    for ln in str(loc["fix_after"]).splitlines():
-                        lines.append(f"+ {ln}")
-                lines.append("```")
-            lines.append("")
-
-    if report.get("remediation_steps"):
-        lines.append("## Remediation\n")
-        lines.append(str(report["remediation_steps"]))
-        lines.append("")
-
-    return "\n".join(lines)
