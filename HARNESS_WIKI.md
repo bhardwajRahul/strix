@@ -545,7 +545,7 @@ Created and managed by `telemetry/tracer.py` + `orchestration/scan.py`. Contents
 
 ### 9.7 Resume
 
-Resume is **always on**: presence of `bus.json` triggers it. Fresh runs simply have no `bus.json` to begin with. To force a fresh start with the same `--run-name`, delete the run dir.
+Resume is **always on**: presence of `bus.json` triggers it. Fresh runs simply have no `bus.json` to begin with. The CLI exposes `--resume <run_name>` as the canonical way to opt back into an existing run.
 
 What survives a process restart with the same `scan_id`:
 - Root agent's full LLM conversation (replayed by SDK from `session.db`).

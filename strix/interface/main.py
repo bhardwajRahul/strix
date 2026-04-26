@@ -5,6 +5,7 @@ Strix Agent Interface
 
 import argparse
 import asyncio
+import json
 import shutil
 import sys
 from pathlib import Path
@@ -309,10 +310,10 @@ Examples:
         "-t",
         "--target",
         type=str,
-        required=True,
         action="append",
         help="Target to test (URL, repository, local directory path, domain name, or IP address). "
-        "Can be specified multiple times for multi-target scans.",
+        "Can be specified multiple times for multi-target scans. "
+        "Required for fresh runs; loaded from disk when ``--resume`` is set.",
     )
     parser.add_argument(
         "--instruction",
@@ -386,6 +387,17 @@ Examples:
         help="Path to a custom config file (JSON) to use instead of ~/.strix/cli-config.json",
     )
 
+    parser.add_argument(
+        "--resume",
+        type=str,
+        metavar="RUN_NAME",
+        help=(
+            "Resume a prior scan by its run name (the dir under ./strix_runs/). "
+            "Picks up the root + every non-terminal subagent's full LLM history "
+            "and bus topology. Skips fresh run-name generation."
+        ),
+    )
+
     args = parser.parse_args()
 
     if args.instruction and args.instruction_file:
@@ -403,26 +415,106 @@ Examples:
         except Exception as e:
             parser.error(f"Failed to read instruction file '{instruction_path}': {e}")
 
-    args.targets_info = []
-    for target in args.target:
-        try:
-            target_type, target_dict = infer_target_type(target)
-
-            if target_type == "local_code":
-                display_target = target_dict.get("target_path", target)
-            else:
-                display_target = target
-
-            args.targets_info.append(
-                {"type": target_type, "details": target_dict, "original": display_target}
+    if args.resume:
+        if args.target:
+            parser.error(
+                "Cannot combine --resume with --target. --resume picks up where "
+                "the prior run left off, including the original target list."
             )
-        except ValueError:
-            parser.error(f"Invalid target '{target}'")
+        _load_resume_state(args, parser)
+    else:
+        if not args.target:
+            parser.error(
+                "the following arguments are required: -t/--target "
+                "(or use --resume <run_name> to continue a prior scan)"
+            )
+        args.targets_info = []
+        for target in args.target:
+            try:
+                target_type, target_dict = infer_target_type(target)
 
-    assign_workspace_subdirs(args.targets_info)
-    rewrite_localhost_targets(args.targets_info, HOST_GATEWAY_HOSTNAME)
+                if target_type == "local_code":
+                    display_target = target_dict.get("target_path", target)
+                else:
+                    display_target = target
+
+                args.targets_info.append(
+                    {"type": target_type, "details": target_dict, "original": display_target}
+                )
+            except ValueError:
+                parser.error(f"Invalid target '{target}'")
+
+        assign_workspace_subdirs(args.targets_info)
+        rewrite_localhost_targets(args.targets_info, HOST_GATEWAY_HOSTNAME)
 
     return args
+
+
+def _persist_scan_state(args: argparse.Namespace) -> None:
+    """Dump the resolved scan inputs to ``{run_dir}/scan_state.json``.
+
+    Called once at the end of fresh-run setup. ``--resume <run_name>`` on
+    a future invocation reads this file to repopulate targets, scan_mode,
+    instruction, local_sources, and diff_scope without the user having to
+    retype them.
+    """
+    run_dir = Path("strix_runs") / args.run_name
+    run_dir.mkdir(parents=True, exist_ok=True)
+    state = {
+        "targets_info": args.targets_info,
+        "scan_mode": args.scan_mode,
+        "instruction": args.instruction,
+        "non_interactive": args.non_interactive,
+        "local_sources": getattr(args, "local_sources", []),
+        "diff_scope": getattr(args, "diff_scope", {"active": False}),
+        "scope_mode": args.scope_mode,
+        "diff_base": args.diff_base,
+    }
+    (run_dir / "scan_state.json").write_text(
+        json.dumps(state, ensure_ascii=False, indent=2, default=str),
+        encoding="utf-8",
+    )
+
+
+def _load_resume_state(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
+    """Populate ``args.targets_info`` and friends from a prior run's scan state.
+
+    Reads ``strix_runs/<run_name>/scan_state.json`` written at the end of the
+    fresh-run setup in ``main()``. Only fields the user did not explicitly
+    set on this invocation are restored — passing ``--instruction`` on
+    resume, for example, overrides the persisted instruction.
+    """
+    state_path = Path("strix_runs") / args.resume / "scan_state.json"
+    if not state_path.exists():
+        parser.error(
+            f"--resume {args.resume}: no such run "
+            f"(missing {state_path}; remove --resume for a fresh start)"
+        )
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        parser.error(f"--resume {args.resume}: scan_state.json unreadable: {exc}")
+
+    args.targets_info = state.get("targets_info") or []
+    if not args.targets_info:
+        parser.error(f"--resume {args.resume}: scan_state.json has no targets_info")
+
+    if args.instruction is None:
+        args.instruction = state.get("instruction")
+    if state.get("instruction_file") and args.instruction_file is None:
+        args.instruction_file = state.get("instruction_file")
+    if state.get("local_sources"):
+        args.local_sources = state.get("local_sources")
+    if state.get("diff_scope"):
+        args.diff_scope = state.get("diff_scope")
+    persisted_scan_mode = state.get("scan_mode")
+    if persisted_scan_mode and args.scan_mode == "deep":
+        # Default scan_mode is "deep"; only override from disk if the user
+        # didn't explicitly pass a different one. (Best-effort: argparse
+        # can't tell "user passed 'deep'" from "default 'deep'"; if the
+        # persisted run was "quick" and user re-runs with an explicit
+        # ``-m deep``, we'll honor the persisted mode. Acceptable.)
+        args.scan_mode = persisted_scan_mode
 
 
 def display_completion_message(args: argparse.Namespace, results_path: Path) -> None:
@@ -469,7 +561,7 @@ def display_completion_message(args: argparse.Namespace, results_path: Path) -> 
         resume_text.append("\n")
         resume_text.append("Resume", style="dim")
         resume_text.append("  ")
-        resume_text.append(f"strix --run-name {args.run_name}", style="#22c55e")
+        resume_text.append(f"strix --resume {args.run_name}", style="#22c55e")
         panel_parts.extend(["\n", resume_text])
 
     panel_content = Text.assemble(*panel_parts)
@@ -558,48 +650,54 @@ def main() -> None:
 
     persist_current()
 
-    args.run_name = generate_run_name(args.targets_info)
+    args.run_name = args.resume or generate_run_name(args.targets_info)
 
-    for target_info in args.targets_info:
-        if target_info["type"] == "repository":
-            repo_url = target_info["details"]["target_repo"]
-            dest_name = target_info["details"].get("workspace_subdir")
-            cloned_path = clone_repository(repo_url, args.run_name, dest_name)
-            target_info["details"]["cloned_repo_path"] = cloned_path
+    if not args.resume:
+        for target_info in args.targets_info:
+            if target_info["type"] == "repository":
+                repo_url = target_info["details"]["target_repo"]
+                dest_name = target_info["details"].get("workspace_subdir")
+                cloned_path = clone_repository(repo_url, args.run_name, dest_name)
+                target_info["details"]["cloned_repo_path"] = cloned_path
 
-    args.local_sources = collect_local_sources(args.targets_info)
-    try:
-        diff_scope = resolve_diff_scope_context(
-            local_sources=args.local_sources,
-            scope_mode=args.scope_mode,
-            diff_base=args.diff_base,
-            non_interactive=args.non_interactive,
-        )
-    except ValueError as e:
-        console = Console()
-        error_text = Text()
-        error_text.append("DIFF SCOPE RESOLUTION FAILED", style="bold red")
-        error_text.append("\n\n", style="white")
-        error_text.append(str(e), style="white")
+        args.local_sources = collect_local_sources(args.targets_info)
+        try:
+            diff_scope = resolve_diff_scope_context(
+                local_sources=args.local_sources,
+                scope_mode=args.scope_mode,
+                diff_base=args.diff_base,
+                non_interactive=args.non_interactive,
+            )
+        except ValueError as e:
+            console = Console()
+            error_text = Text()
+            error_text.append("DIFF SCOPE RESOLUTION FAILED", style="bold red")
+            error_text.append("\n\n", style="white")
+            error_text.append(str(e), style="white")
 
-        panel = Panel(
-            error_text,
-            title="[bold white]STRIX",
-            title_align="left",
-            border_style="red",
-            padding=(1, 2),
-        )
-        console.print("\n")
-        console.print(panel)
-        console.print()
-        sys.exit(1)
+            panel = Panel(
+                error_text,
+                title="[bold white]STRIX",
+                title_align="left",
+                border_style="red",
+                padding=(1, 2),
+            )
+            console.print("\n")
+            console.print(panel)
+            console.print()
+            sys.exit(1)
 
-    args.diff_scope = diff_scope.metadata
-    if diff_scope.instruction_block:
-        if args.instruction:
-            args.instruction = f"{diff_scope.instruction_block}\n\n{args.instruction}"
-        else:
-            args.instruction = diff_scope.instruction_block
+        args.diff_scope = diff_scope.metadata
+        if diff_scope.instruction_block:
+            if args.instruction:
+                args.instruction = f"{diff_scope.instruction_block}\n\n{args.instruction}"
+            else:
+                args.instruction = diff_scope.instruction_block
+
+        # Persist the fully-resolved scan state so a future
+        # ``--resume <run_name>`` invocation can pick up without
+        # re-supplying targets / instructions / scope.
+        _persist_scan_state(args)
 
     posthog.start(
         model=load_settings().llm.model,
