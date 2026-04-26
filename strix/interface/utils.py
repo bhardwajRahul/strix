@@ -1320,12 +1320,6 @@ def process_pull_line(
     return last_update
 
 
-# LLM utilities
-def validate_llm_response(response: Any) -> None:
-    if not response or not response.choices or not response.choices[0].message.content:
-        raise RuntimeError("Invalid response from LLM")
-
-
 def validate_config_file(config_path: str) -> Path:
     console = Console()
     path = Path(config_path)

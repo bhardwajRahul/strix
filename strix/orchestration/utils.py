@@ -8,7 +8,7 @@ from typing import Any, Literal
 from agents.model_settings import ModelSettings
 from openai.types.shared import Reasoning
 
-from strix.llm.retry import DEFAULT_RETRY
+from strix.config.models import DEFAULT_MODEL_RETRY
 
 
 # Default max_turns budget passed to the SDK runner.
@@ -111,7 +111,7 @@ def make_model_settings(
     model_settings = ModelSettings(
         parallel_tool_calls=False,
         tool_choice="required",
-        retry=DEFAULT_RETRY,
+        retry=DEFAULT_MODEL_RETRY,
     )
     if reasoning_effort is not None:
         model_settings = model_settings.resolve(

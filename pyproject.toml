@@ -187,18 +187,12 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 # Lazy imports inside functions to avoid circular dependency with
-# strix.telemetry / strix.llm.dedupe / cvss.
+# strix.telemetry / strix.report.dedupe / cvss.
 "strix/tools/notes/tools.py" = ["PLC0415", "TC002"]
 "strix/tools/finish/tool.py" = ["PLC0415", "TC002"]
 "strix/tools/reporting/tool.py" = ["PLC0415", "TC002"]
 "strix/tools/**/*.py" = [
     "ARG001", # Unused function argument (tools may have unused args for interface consistency)
-]
-# Anthropic cache wrapper inherits from LitellmModel; signature shadows builtin `input`.
-"strix/llm/anthropic_cache_wrapper.py" = [
-    "A002",   # Argument shadows builtin (parent signature uses `input`)
-    "TC002",  # Many SDK types are imports-for-annotations only
-    "TC003",  # collections.abc.AsyncIterator imported for return type
 ]
 # Custom Docker subclass duplicates parent body; some imports are for annotations.
 # Backend factories import their backend's deps lazily so deployments
@@ -207,9 +201,6 @@ ignore = [
 "strix/runtime/docker_client.py" = [
     "TC002",  # Manifest, Container imported for annotations
     "TC003",  # uuid imported for annotation
-]
-"strix/llm/multi_provider_setup.py" = [
-    "TC002",  # Model, ModelProvider imported for annotations
 ]
 # SDK function-tool wrappers: the SDK calls get_type_hints() at registration
 # time to derive the JSON schema, which evaluates annotations at runtime —

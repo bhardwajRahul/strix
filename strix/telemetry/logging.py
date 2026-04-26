@@ -16,6 +16,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import os
+import warnings
 from contextvars import ContextVar
 from pathlib import Path  # noqa: TC003  used at runtime by ``setup_scan_logging``
 from typing import TYPE_CHECKING
@@ -81,6 +82,19 @@ _HANDLER_TAG = "_strix_scan_handler"
 _TRACKED_ROOTS: tuple[str, ...] = ("strix", "openai.agents")
 
 
+def configure_dependency_logging() -> None:
+    """Quiet dependency logging/warnings that obscure Strix scan logs."""
+    with contextlib.suppress(Exception):
+        import litellm
+
+        litellm_logging = litellm._logging
+        litellm_logging._disable_debugging()  # type: ignore[no-untyped-call]
+
+    logging.getLogger("asyncio").setLevel(logging.CRITICAL)
+    logging.getLogger("asyncio").propagate = False
+    warnings.filterwarnings("ignore", category=RuntimeWarning, module="asyncio")
+
+
 def setup_scan_logging(run_dir: Path, *, debug: bool | None = None) -> Callable[[], None]:
     """Attach scan-scoped handlers; return a teardown callable.
 
@@ -97,6 +111,8 @@ def setup_scan_logging(run_dir: Path, *, debug: bool | None = None) -> Callable[
         call attached. Idempotent — calling twice is a no-op the second
         time. Safe to call from a ``finally`` block.
     """
+    configure_dependency_logging()
+
     if debug is None:
         debug = (os.environ.get("STRIX_DEBUG") or "").strip().lower() in {
             "1",

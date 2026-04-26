@@ -10,8 +10,8 @@ Bool fields auto-parse ``"0"``/``"false"``/``"no"``/``"off"`` as falsy
 and any other non-empty string as truthy. Int fields auto-coerce from
 string env. The ``api_base`` field walks an alias chain so users can
 point at any OpenAI-compatible endpoint via whichever env name they
-prefer (``LLM_API_BASE`` / ``OPENAI_API_BASE`` / ``LITELLM_BASE_URL`` /
-``OLLAMA_API_BASE``).
+prefer (``LLM_API_BASE`` / ``OPENAI_API_BASE`` / ``OPENAI_BASE_URL`` /
+``LITELLM_BASE_URL`` / ``OLLAMA_API_BASE``).
 
 Each sub-model is a :class:`BaseSettings` so it reads env independently
 — the alternative (one mega-BaseSettings with flat fields) would lose
@@ -41,12 +41,16 @@ class LlmSettings(BaseSettings):
     model_config = _BASE_CONFIG
 
     model: str | None = Field(default=None, alias="STRIX_LLM")
-    api_key: str | None = Field(default=None, alias="LLM_API_KEY")
+    api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("LLM_API_KEY", "OPENAI_API_KEY"),
+    )
     api_base: str | None = Field(
         default=None,
         validation_alias=AliasChoices(
             "LLM_API_BASE",
             "OPENAI_API_BASE",
+            "OPENAI_BASE_URL",
             "LITELLM_BASE_URL",
             "OLLAMA_API_BASE",
         ),

@@ -9,15 +9,21 @@ import json
 import shutil
 import sys
 from pathlib import Path
-from typing import Any
 
-import litellm
+from agents.model_settings import ModelSettings
+from agents.models.interface import ModelTracing
+from agents.models.multi_provider import MultiProvider
 from docker.errors import DockerException
 from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
 
-from strix.config import apply_config_override, load_settings, persist_current
+from strix.config import (
+    apply_config_override,
+    load_settings,
+    persist_current,
+)
+from strix.config.models import configure_sdk_model_defaults, normalize_model_name
 from strix.interface.cli import run_cli
 from strix.interface.tui import run_tui
 from strix.interface.utils import (
@@ -34,9 +40,9 @@ from strix.interface.utils import (
     resolve_diff_scope_context,
     rewrite_localhost_targets,
     validate_config_file,
-    validate_llm_response,
 )
 from strix.telemetry import posthog
+from strix.telemetry.logging import configure_dependency_logging
 from strix.telemetry.scan_store import get_global_scan_store
 
 
@@ -97,7 +103,7 @@ def validate_environment() -> None:
                 error_text.append("• ", style="white")
                 error_text.append("STRIX_LLM", style="bold cyan")
                 error_text.append(
-                    " - Model name to use with litellm (e.g., 'openai/gpt-5.4')\n",
+                    " - Model name to use (e.g., 'gpt-5.4' or 'claude-sonnet-4-6')\n",
                     style="white",
                 )
 
@@ -136,7 +142,7 @@ def validate_environment() -> None:
                     )
 
         error_text.append("\nExample setup:\n", style="white")
-        error_text.append("export STRIX_LLM='openai/gpt-5.4'\n", style="dim white")
+        error_text.append("export STRIX_LLM='gpt-5.4'\n", style="dim white")
 
         if missing_optional_vars:
             for var in missing_optional_vars:
@@ -210,27 +216,27 @@ async def warm_up_llm() -> None:
     logger.info("Warming up LLM connection")
 
     try:
-        llm = load_settings().llm
+        settings = load_settings()
+        configure_sdk_model_defaults(settings)
+        llm = settings.llm
 
-        test_messages = [
-            {"role": "system", "content": "You are a helpful assistant."},
-            {"role": "user", "content": "Reply with just 'OK'."},
-        ]
-
-        completion_kwargs: dict[str, Any] = {
-            "model": llm.model,
-            "messages": test_messages,
-            "timeout": llm.timeout,
-        }
-        if llm.api_key:
-            completion_kwargs["api_key"] = llm.api_key
-        if llm.api_base:
-            completion_kwargs["api_base"] = llm.api_base
-
-        response = litellm.completion(**completion_kwargs)
-
-        validate_llm_response(response)
-        logger.info("LLM warm-up succeeded for model %s", llm.model)
+        model = MultiProvider().get_model(normalize_model_name(llm.model or ""))
+        await asyncio.wait_for(
+            model.get_response(
+                system_instructions="You are a helpful assistant.",
+                input="Reply with just 'OK'.",
+                model_settings=ModelSettings(),
+                tools=[],
+                output_schema=None,
+                handoffs=[],
+                tracing=ModelTracing.DISABLED,
+                previous_response_id=None,
+                conversation_id=None,
+                prompt=None,
+            ),
+            timeout=llm.timeout,
+        )
+        logger.info("LLM warm-up succeeded for model %s", normalize_model_name(llm.model or ""))
 
     except Exception as e:
         logger.exception("LLM warm-up failed")
@@ -671,6 +677,8 @@ def pull_docker_image() -> None:
 
 
 def main() -> None:
+    configure_dependency_logging()
+
     if sys.platform == "win32":
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 

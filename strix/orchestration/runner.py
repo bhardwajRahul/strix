@@ -24,7 +24,7 @@ from openai import APIError
 
 from strix.agents.factory import build_strix_agent, make_child_factory
 from strix.config import load_settings
-from strix.llm.multi_provider_setup import build_multi_provider
+from strix.config.models import configure_sdk_model_defaults, normalize_model_name
 from strix.orchestration.coordinator import AgentCoordinator, Status
 from strix.orchestration.utils import (
     DEFAULT_MAX_TURNS,
@@ -470,7 +470,8 @@ async def run_strix_scan(
     )
 
     settings = load_settings()
-    resolved_model = model or settings.llm.model
+    configure_sdk_model_defaults(settings)
+    resolved_model = normalize_model_name(model or settings.llm.model or "")
     if not resolved_model:
         raise RuntimeError(
             "No LLM model configured. Set STRIX_LLM env or pass model= to run_strix_scan().",
@@ -540,7 +541,6 @@ async def run_strix_scan(
         model_settings = make_model_settings(settings.llm.reasoning_effort)
         run_config = RunConfig(
             model=resolved_model,
-            model_provider=build_multi_provider(),
             model_settings=model_settings,
             sandbox=SandboxRunConfig(client=bundle["client"], session=bundle["session"]),
             trace_include_sensitive_data=False,

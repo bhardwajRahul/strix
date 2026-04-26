@@ -151,7 +151,7 @@ _REQUIRED_FIELDS = {
 }
 
 
-async def _do_create(  # noqa: PLR0912, PLR0915
+async def _do_create(  # noqa: PLR0912
     *,
     title: str,
     description: str,
@@ -225,7 +225,7 @@ async def _do_create(  # noqa: PLR0912, PLR0915
                 "warning": "Report could not be persisted - scan store unavailable",
             }
 
-        from strix.llm.dedupe import check_duplicate
+        from strix.report.dedupe import check_duplicate
 
         existing = scan_store.get_existing_vulnerabilities()
         candidate = {

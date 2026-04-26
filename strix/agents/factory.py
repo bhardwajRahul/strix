@@ -242,7 +242,7 @@ def build_strix_agent(
         # looping through think/list_todos forever.
         reset_tool_choice=interactive,
         # model=None so ``RunConfig.model`` drives provider selection
-        # via :func:`build_multi_provider` rather than the SDK's default.
+        # through the SDK's default MultiProvider.
         model=None,
         capabilities=[Filesystem(), Shell()],
     )
