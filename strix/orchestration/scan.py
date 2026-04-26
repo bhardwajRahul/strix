@@ -260,10 +260,12 @@ async def run_strix_scan(
 
     # Wire the per-agent todo store to ``{run_dir}/todos.json`` (mirrored
     # on every CRUD) and reload any prior todos so respawned subagents
-    # find their lists intact.
+    # find their lists intact. Same for the shared notes store.
+    from strix.tools.notes.tools import hydrate_notes_from_disk
     from strix.tools.todo.tools import hydrate_todos_from_disk
 
     hydrate_todos_from_disk(run_dir)
+    hydrate_notes_from_disk(run_dir)
 
     root_id: str | None = None
     if is_resume:
@@ -425,6 +427,12 @@ async def run_strix_scan(
                     "content": resume_instruction,
                 },
             )
+            # ``bus.send`` is one of the high-frequency mutations that
+            # deliberately skips ``_maybe_snapshot``. The resume-instruction
+            # is the one specific message we can't lose: a SIGKILL between
+            # the send and root's first turn would silently drop the
+            # user's new ``--instruction``. Force a snapshot here.
+            await bus._maybe_snapshot()
             logger.info(
                 "Resume: injected new instruction into root inbox (len=%d)",
                 len(resume_instruction),

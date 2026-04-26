@@ -1,8 +1,9 @@
 """Per-run notes (shared across agents).
 
-Pure in-memory state for the lifetime of one scan: the module-level
-``_notes_storage`` dict is visible to every agent in the same process.
-No disk I/O — process exit clears the lot. Concurrent writers are
+Module-level dict shared across every agent in the same scan process.
+Mirrored to ``{run_dir}/notes.json`` after every CRUD via :func:`_persist`
+so a process restart can :func:`hydrate_notes_from_disk` and the resumed
+scan picks up exactly where it left off. Concurrent writers are
 serialised by ``_notes_lock`` since each tool entry-point dispatches
 the impl onto a worker thread via ``asyncio.to_thread``.
 """
@@ -12,9 +13,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import tempfile
 import threading
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from agents import RunContextWrapper, function_tool
@@ -27,6 +30,79 @@ _notes_storage: dict[str, dict[str, Any]] = {}
 _VALID_NOTE_CATEGORIES = ["general", "findings", "methodology", "questions", "plan", "wiki"]
 _notes_lock = threading.RLock()
 _DEFAULT_CONTENT_PREVIEW_CHARS = 280
+
+# On-disk mirror path. Set by :func:`hydrate_notes_from_disk` once per
+# scan; unset means "no persistence" (e.g. unit tests). All writes go
+# through :func:`_persist`, which is a no-op until the path is set.
+_notes_path: Path | None = None
+
+
+def hydrate_notes_from_disk(run_dir: Path) -> None:
+    """Wire the on-disk mirror at ``{run_dir}/notes.json`` and reload it.
+
+    Called by :func:`run_strix_scan` once at scan setup. Subsequent CRUD
+    calls auto-persist after every mutation. Idempotent on missing file.
+    Tolerant of corruption — logs and starts empty rather than failing
+    the scan over a broken sidecar artifact.
+    """
+    global _notes_path  # noqa: PLW0603
+    _notes_path = run_dir / "notes.json"
+    with _notes_lock:
+        _notes_storage.clear()
+        if not _notes_path.exists():
+            return
+        try:
+            data = json.loads(_notes_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            logger.exception(
+                "notes.json at %s is unreadable; starting with empty notes",
+                _notes_path,
+            )
+            return
+        if not isinstance(data, dict):
+            return
+        _notes_storage.update(
+            {
+                nid: note
+                for nid, note in data.items()
+                if isinstance(nid, str) and isinstance(note, dict)
+            }
+        )
+        logger.info(
+            "notes hydrated from %s (%d note(s))",
+            _notes_path,
+            len(_notes_storage),
+        )
+
+
+def _persist() -> None:
+    """Atomic-rename mirror of ``_notes_storage`` → ``{run_dir}/notes.json``.
+
+    No-op when ``_notes_path`` isn't wired (tests). Errors are logged
+    and swallowed — a disk hiccup must never tear down the agent's call.
+    """
+    path = _notes_path
+    if path is None:
+        return
+    try:
+        payload = json.dumps(_notes_storage, ensure_ascii=False, default=str)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with (
+            _notes_lock,
+            tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=str(path.parent),
+                prefix=f".{path.name}.",
+                suffix=".tmp",
+                delete=False,
+            ) as tmp,
+        ):
+            tmp.write(payload)
+            tmp_path = Path(tmp.name)
+        tmp_path.replace(path)
+    except Exception:
+        logger.exception("notes persist to %s failed", path)
 
 
 def _filter_notes(
@@ -122,6 +198,7 @@ def _create_note_impl(
         except (ValueError, TypeError) as e:
             return {"success": False, "error": f"Failed to create note: {e}", "note_id": None}
         else:
+            _persist()
             return {
                 "success": True,
                 "note_id": note_id,
@@ -194,6 +271,7 @@ def _update_note_impl(
         except (ValueError, TypeError) as e:
             return {"success": False, "error": f"Failed to update note: {e}"}
         else:
+            _persist()
             return {
                 "success": True,
                 "message": f"Note '{note['title']}' updated successfully",
@@ -211,6 +289,7 @@ def _delete_note_impl(note_id: str) -> dict[str, Any]:
         except (ValueError, TypeError) as e:
             return {"success": False, "error": f"Failed to delete note: {e}"}
         else:
+            _persist()
             return {
                 "success": True,
                 "message": f"Note '{note_title}' deleted successfully",
