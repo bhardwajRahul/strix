@@ -9,6 +9,8 @@ from typing import Any
 
 from agents import RunContextWrapper, function_tool
 
+from strix.orchestration.coordinator import coordinator_from_context
+
 
 logger = logging.getLogger(__name__)
 
@@ -144,12 +146,38 @@ async def finish_scan(
         recommendations: Prioritized, actionable remediation.
     """
     inner = ctx.context if isinstance(ctx.context, dict) else {}
+    coordinator = coordinator_from_context(inner)
+    me = inner.get("agent_id")
+    parent_id = inner.get("parent_id")
+    if coordinator is not None and parent_id is None and me is not None:
+        active_agents = await coordinator.active_agents_except(me)
+    else:
+        active_agents = []
+
+    if active_agents:
+        return json.dumps(
+            {
+                "success": False,
+                "scan_completed": False,
+                "error": "active_agents_remaining",
+                "message": (
+                    "Cannot finish scan while child agents are still active. "
+                    "Wait for completion, send them finish instructions, or stop them first."
+                ),
+                "active_agents": active_agents,
+            },
+            ensure_ascii=False,
+            default=str,
+        )
+
     result = await asyncio.to_thread(
         _do_finish,
-        parent_id=inner.get("parent_id"),
+        parent_id=parent_id,
         executive_summary=executive_summary,
         methodology=methodology,
         technical_analysis=technical_analysis,
         recommendations=recommendations,
     )
+    if result.get("success") and result.get("scan_completed"):
+        inner["finish_scan_called"] = True
     return json.dumps(result, ensure_ascii=False, default=str)

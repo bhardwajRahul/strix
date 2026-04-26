@@ -1,11 +1,11 @@
 """Top-level scan entry point with auto-resume.
 
-1. Build (or take from caller) the per-scan ``AgentMessageBus``.
+1. Build (or take from caller) the per-scan ``AgentCoordinator``.
 2. Wire a snapshot path so every lifecycle event auto-persists ``bus.json``.
 3. Acquire an advisory file lock so a second ``strix`` process can't run
    on the same ``scan_id`` concurrently.
 4. **Resume detection**: if ``{run_dir}/bus.json`` already exists, restore
-   the bus, hydrate the tracer, reuse the persisted ``root_id`` instead
+   the coordinator, hydrate the tracer, reuse the persisted ``root_id`` instead
    of generating a fresh one, and respawn every non-terminal subagent
    from its per-child ``SQLiteSession`` before starting the root.
 5. Bring up (or reuse) a sandbox session for ``scan_id``.
@@ -41,10 +41,11 @@ from strix.agents.factory import build_strix_agent, make_child_factory
 from strix.config import load_settings
 from strix.llm.multi_provider_setup import build_multi_provider
 from strix.llm.retry import DEFAULT_RETRY
-from strix.orchestration.bus import AgentMessageBus
-from strix.orchestration.filter import inject_messages_filter
-from strix.orchestration.hooks import StrixOrchestrationHooks
-from strix.orchestration.run_loop import run_with_continuation
+from strix.orchestration.coordinator import (
+    AgentCoordinator,
+    open_agent_session,
+    run_with_continuation,
+)
 from strix.runtime import session_manager
 from strix.telemetry.logging import set_agent_id, set_scan_id, setup_scan_logging
 
@@ -176,12 +177,12 @@ async def run_strix_scan(
     image: str,
     local_sources: list[dict[str, str]] | None = None,
     tracer: Any | None = None,
-    bus: AgentMessageBus | None = None,
+    coordinator: AgentCoordinator | None = None,
     interactive: bool = False,
     max_turns: int = _MAX_TURNS,
     model: str | None = None,
     cleanup_on_exit: bool = True,
-) -> RunResultBase:
+) -> RunResultBase | None:
     """Run one Strix scan end-to-end against a freshly-prepared sandbox.
 
     Args:
@@ -253,12 +254,11 @@ async def run_strix_scan(
         )
     logger.info("LLM model resolved: %s", resolved_model)
 
-    # Caller may pre-create the bus so it can hold a handle (e.g., the
-    # TUI uses it to route stop / chat-input commands). Otherwise we
-    # own the bus internally for the scan's lifetime.
-    if bus is None:
-        bus = AgentMessageBus()
-    bus.set_snapshot_path(bus_path)
+    # Caller may pre-create the coordinator so it can route stop/chat
+    # commands while the scan loop runs in another thread.
+    if coordinator is None:
+        coordinator = AgentCoordinator()
+    coordinator.set_snapshot_path(bus_path)
 
     if tracer is not None and hasattr(tracer, "hydrate_from_run_dir"):
         tracer.hydrate_from_run_dir()
@@ -281,8 +281,8 @@ async def run_strix_scan(
             raise RuntimeError(
                 f"Cannot resume scan {scan_id}: bus.json is unreadable: {exc}",
             ) from exc
-        await bus.restore(snap)
-        for aid, parent in bus.parent_of.items():
+        await coordinator.restore(snap)
+        for aid, parent in coordinator.parent_of.items():
             if parent is None:
                 root_id = aid
                 break
@@ -292,11 +292,9 @@ async def run_strix_scan(
                 f"Cannot resume scan {scan_id}: bus.json has no root agent (parent=None)",
             )
         logger.info(
-            "Resume: restored bus with %d agent(s); root=%s; %d non-terminal to respawn",
-            len(bus.statuses),
+            "Resume: restored coordinator with %d agent(s); root=%s",
+            len(coordinator.statuses),
             root_id,
-            sum(1 for s in bus.statuses.values() if s in {"running", "waiting", "llm_failed"})
-            - 1,  # subtract root
         )
     else:
         root_id = uuid.uuid4().hex[:8]
@@ -334,7 +332,7 @@ async def run_strix_scan(
         )
 
         if not is_resume:
-            await bus.register(
+            await coordinator.register(
                 root_id,
                 "strix",
                 parent_id=None,
@@ -353,7 +351,7 @@ async def run_strix_scan(
         )
 
         context: dict[str, Any] = {
-            "bus": bus,
+            "coordinator": coordinator,
             "sandbox_session": bundle["session"],
             "sandbox_client": bundle["client"],
             "caido_client": bundle["caido_client"],
@@ -390,14 +388,13 @@ async def run_strix_scan(
             model_provider=build_multi_provider(),
             model_settings=model_settings,
             sandbox=SandboxRunConfig(client=bundle["client"], session=bundle["session"]),
-            call_model_input_filter=inject_messages_filter,
             tracing_disabled=False,
             trace_include_sensitive_data=False,
         )
 
         if is_resume:
             await _respawn_subagents(
-                bus=bus,
+                coordinator=coordinator,
                 sessions_dir=sessions_dir,
                 factory=agent_factory,
                 parent_ctx=context,
@@ -413,17 +410,18 @@ async def run_strix_scan(
         session_db = run_dir / "session.db"
         root_session = SQLiteSession(session_id=scan_id, db_path=session_db)
         sessions_to_close.append(root_session)
+        await coordinator.attach_runtime(root_id, session=root_session)
 
         initial_input: Any = [] if is_resume else _build_root_task(scan_config)
 
         # Resume + new ``--instruction``: SDK replay drives root from
         # session.db with ``initial_input=[]``, so a brand-new instruction
         # passed on the resume CLI would otherwise be silently ignored.
-        # Inject it as a fresh user message in root's inbox; the
-        # ``inject_messages_filter`` will surface it on the very next turn.
+        # Inject it as a fresh user message in root's SDK session; the
+        # next run cycle will replay it with the rest of the session.
         resume_instruction = str(scan_config.get("resume_instruction") or "").strip()
         if is_resume and resume_instruction:
-            await bus.send(
+            await coordinator.send(
                 root_id,
                 {
                     "from": "user",
@@ -432,41 +430,38 @@ async def run_strix_scan(
                     "content": resume_instruction,
                 },
             )
-            # ``bus.send`` is one of the high-frequency mutations that
-            # deliberately skips ``_maybe_snapshot``. The resume-instruction
-            # is the one specific message we can't lose: a SIGKILL between
-            # the send and root's first turn would silently drop the
-            # user's new ``--instruction``. Force a snapshot here.
-            await bus._maybe_snapshot()
             logger.info(
                 "Resume: injected new instruction into root inbox (len=%d)",
                 len(resume_instruction),
             )
+
+        async with coordinator._lock:
+            root_status = coordinator.statuses.get(root_id)
 
         return await run_with_continuation(
             agent=root_agent,
             initial_input=initial_input,
             run_config=run_config,
             context=context,
-            hooks=StrixOrchestrationHooks(),
             max_turns=max_turns,
-            bus=bus,
+            coordinator=coordinator,
             agent_id=root_id,
             interactive=interactive,
             session=root_session,
+            start_parked=bool(interactive and is_resume and root_status != "running"),
         )
     except BaseException as exc:
         logger.exception("Strix scan %s failed", scan_id)
         # Cancel any descendant tasks the root spawned before unwinding.
         # cancel_descendants is idempotent and handles the empty-tree case.
         if root_id is not None:
-            await bus.cancel_descendants(root_id)
+            await coordinator.cancel_descendants(root_id)
             # The SDK's on_agent_end hook only fires after a successful
             # ``Runner.run_streamed`` reaches the agent's first turn. A
             # failure earlier (e.g., model-provider routing, sandbox
             # bring-up) leaves the root stuck at status="running" — the
             # TUI keeps animating "Initializing" forever. Finalize it
-            # here so the bus + tracer reflect reality, and stash the
+            # here so the coordinator + tracer reflect reality, and stash the
             # error message for the status-line display.
             error_message = f"{type(exc).__name__}: {exc}"
             if tracer is not None and root_id in getattr(tracer, "agents", {}):
@@ -474,7 +469,7 @@ async def run_strix_scan(
                 tracer.agents[root_id]["error_message"] = error_message
                 tracer.agents[root_id]["updated_at"] = datetime.now(UTC).isoformat()
             with contextlib.suppress(Exception):
-                await bus.finalize(root_id, "failed")
+                await coordinator.set_status(root_id, "failed")
             set_agent_id(None)
         raise
     finally:
@@ -482,7 +477,7 @@ async def run_strix_scan(
             with contextlib.suppress(Exception):
                 s.close()
         with contextlib.suppress(Exception):
-            await bus._maybe_snapshot()
+            await coordinator._maybe_snapshot()
         if cleanup_on_exit:
             logger.info("Tearing down sandbox session for scan %s", scan_id)
             await session_manager.cleanup(scan_id)
@@ -493,7 +488,7 @@ async def run_strix_scan(
 
 async def _respawn_subagents(
     *,
-    bus: AgentMessageBus,
+    coordinator: AgentCoordinator,
     sessions_dir: Path,
     factory: Any,
     parent_ctx: dict[str, Any],
@@ -502,57 +497,77 @@ async def _respawn_subagents(
     root_id: str,
     sessions_to_close: list[SQLiteSession],
 ) -> None:
-    """Re-spawn every non-terminal subagent from a restored bus snapshot.
+    """Re-spawn subagent runners from a restored coordinator snapshot.
 
     Each child gets its own :class:`SQLiteSession` reopened at
     ``sessions_dir/<child_id>.db`` so the SDK replays its prior
     conversation. Per-child failure (missing/corrupt session DB,
     factory raising) finalizes that child as ``crashed`` and continues.
-    Terminal-status agents (``completed`` / ``crashed`` / ``stopped``)
-    are left alone — their stats stay in ``stats_completed`` for the
-    TUI, but no task respawns.
+    Interactive mode respawns every registered child as a parked runner
+    unless it was actively running before the crash. That keeps
+    completed/stopped/crashed/failed agents addressable: a later message
+    wakes the SDK session instead of being dropped into a dead inbox.
     """
-    async with bus._lock:
-        # Snapshot the iteration view first so we can mutate via finalize
+    interactive = bool(parent_ctx.get("interactive", False))
+    async with coordinator._lock:
+        # Snapshot the iteration view first so we can mutate via coordinator
         # below without "dict changed during iteration" trouble.
         agents_snapshot = [
-            (aid, status, dict(bus.metadata.get(aid, {}))) for aid, status in bus.statuses.items()
+            (aid, status, dict(coordinator.metadata.get(aid, {})))
+            for aid, status in coordinator.statuses.items()
         ]
         candidates: list[tuple[str, str, str | None, dict[str, Any]]] = []
-        to_finalize_stopped: list[str] = []
         for aid, status, md in agents_snapshot:
-            if status not in {"running", "waiting", "llm_failed"}:
+            if not interactive and status not in {"running", "waiting", "llm_failed"}:
                 continue
-            if bus.parent_of.get(aid) is None or aid == root_id:
+            if coordinator.parent_of.get(aid) is None or aid == root_id:
                 continue
-            if aid in bus.stopping:
-                # User clicked "stop" before the crash; don't respawn,
-                # and reconcile the bus so its status truthfully reflects
-                # "stopped" instead of staying "running" forever.
-                to_finalize_stopped.append(aid)
-                continue
-            candidates.append((aid, bus.names.get(aid, aid), bus.parent_of.get(aid), md))
-
-    # Finalize outside the lock — ``bus.finalize`` acquires it itself.
-    for aid in to_finalize_stopped:
-        logger.info("respawn-skip %s: previously-cancelled, finalizing as stopped", aid)
-        await bus.finalize(aid, "stopped")
+            md["_restored_status"] = status
+            candidates.append(
+                (
+                    aid,
+                    coordinator.names.get(aid, aid),
+                    coordinator.parent_of.get(aid),
+                    md,
+                )
+            )
 
     for child_id, name, parent_id, md in candidates:
         try:
             session_path = sessions_dir / f"{child_id}.db"
             if not session_path.exists():
+                if interactive:
+                    logger.warning(
+                        "respawn %s (%s): session db missing at %s; starting parked with empty session",
+                        child_id,
+                        name,
+                        session_path,
+                    )
+                else:
+                    logger.warning(
+                        "respawn %s (%s): session db missing at %s — marking crashed",
+                        child_id,
+                        name,
+                        session_path,
+                    )
+                    await coordinator.set_status(child_id, "crashed")
+                    continue
+                session_path.parent.mkdir(parents=True, exist_ok=True)
+
+            restored_status = str(md.get("_restored_status") or "running")
+            start_parked = interactive and restored_status != "running"
+
+            if start_parked:
                 logger.warning(
-                    "respawn %s (%s): session db missing at %s — finalizing as crashed",
+                    "respawn %s (%s): starting parked from status=%s",
                     child_id,
                     name,
-                    session_path,
+                    restored_status,
                 )
-                await bus.finalize(child_id, "crashed")
-                continue
 
-            child_session = SQLiteSession(session_id=child_id, db_path=session_path)
+            child_session = open_agent_session(child_id, session_path)
             sessions_to_close.append(child_session)
+            await coordinator.attach_runtime(child_id, session=child_session)
 
             child_skills = list(md.get("skills") or [])
             child_agent = factory(name=name, skills=child_skills)
@@ -580,7 +595,6 @@ async def _respawn_subagents(
                     client=parent_ctx["sandbox_client"],
                     session=parent_ctx["sandbox_session"],
                 ),
-                call_model_input_filter=inject_messages_filter,
                 tracing_disabled=False,
                 trace_include_sensitive_data=False,
             )
@@ -591,17 +605,16 @@ async def _respawn_subagents(
                     initial_input=[],
                     run_config=child_run_config,
                     context=child_ctx,
-                    hooks=StrixOrchestrationHooks(),
                     max_turns=int(parent_ctx.get("max_turns", 300)),
-                    bus=bus,
+                    coordinator=coordinator,
                     agent_id=child_id,
                     interactive=bool(parent_ctx.get("interactive", False)),
                     session=child_session,
+                    start_parked=start_parked,
                 ),
                 name=f"agent-{name}-{child_id}",
             )
-            async with bus._lock:
-                bus.tasks[child_id] = task_handle
+            await coordinator.attach_runtime(child_id, task=task_handle)
             logger.info(
                 "respawned %s (%s) parent=%s task_len=%d",
                 child_id,
@@ -612,7 +625,7 @@ async def _respawn_subagents(
         except Exception:
             logger.exception("respawn %s failed; marking crashed", child_id)
             with contextlib.suppress(Exception):
-                await bus.finalize(child_id, "crashed")
+                await coordinator.set_status(child_id, "crashed")
 
 
 def _acquire_run_lock(run_dir: Path) -> Any:

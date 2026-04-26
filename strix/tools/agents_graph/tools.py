@@ -1,16 +1,15 @@
-"""Multi-agent graph tools — read/write the :class:`AgentMessageBus`.
+"""Multi-agent graph tools backed by the SDK-native :class:`AgentCoordinator`.
 
 - ``view_agent_graph``: render the parent/child tree.
 - ``agent_status``: per-agent status + pending message count.
-- ``send_message_to_agent``: queue a message in another agent's inbox.
+- ``send_message_to_agent``: append a message to another agent's SDK session.
 - ``wait_for_message``: pause this agent until a message arrives or
   ``timeout_seconds`` elapses.
 - ``create_agent``: spawn a child via
   ``asyncio.create_task(Runner.run(...))``; the task handle is stored
   so a root-level cancel cascades to descendants.
-- ``agent_finish``: subagents only — flips ``agent_finish_called`` so
-  the ``on_agent_end`` hook records "completed" rather than "crashed",
-  and posts a structured completion report to the parent's inbox.
+- ``agent_finish``: subagents only — posts a structured completion
+  report to the parent's SDK session and returns a final-output marker.
 """
 
 from __future__ import annotations
@@ -25,15 +24,16 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from agents import RunConfig, RunContextWrapper, function_tool
 from agents.items import TResponseInputItem
-from agents.memory import SQLiteSession
 from agents.model_settings import ModelSettings
 from agents.sandbox import SandboxRunConfig
 
 from strix.llm.multi_provider_setup import build_multi_provider
 from strix.llm.retry import DEFAULT_RETRY
-from strix.orchestration.filter import inject_messages_filter
-from strix.orchestration.hooks import StrixOrchestrationHooks
-from strix.orchestration.run_loop import run_with_continuation
+from strix.orchestration.coordinator import (
+    coordinator_from_context,
+    open_agent_session,
+    run_with_continuation,
+)
 
 
 if TYPE_CHECKING:
@@ -61,9 +61,9 @@ def _render_completion_report(
 ) -> str:
     """Render a child's completion report as plain structured text.
 
-    Goes into the parent's bus inbox; the inject filter prepends a
-    ``[Message from ...]`` header on top, so this body just carries the
-    contents. No XML — no escaping concerns, no parser ambiguity.
+    Goes into the parent's SDK session with coordinator-added sender
+    metadata, so this body just carries the contents. No XML — no
+    escaping concerns, no parser ambiguity.
     """
     status = "SUCCESS" if success else "FAILED"
     completion_time = datetime.now(UTC).isoformat()
@@ -101,19 +101,16 @@ async def view_agent_graph(ctx: RunContextWrapper) -> str:
     is marked ``← you``.
     """
     inner = _ctx(ctx)
-    bus = inner.get("bus")
+    coordinator = coordinator_from_context(inner)
     me = inner.get("agent_id")
-    if bus is None:
+    if coordinator is None:
         return json.dumps(
-            {"success": False, "error": "Bus not initialized in context."},
+            {"success": False, "error": "Agent coordinator not initialized in context."},
             ensure_ascii=False,
             default=str,
         )
 
-    async with bus._lock:
-        parent_of = dict(bus.parent_of)
-        statuses = dict(bus.statuses)
-        names = dict(bus.names)
+    parent_of, statuses, names = await coordinator.graph_snapshot()
 
     lines: list[str] = []
 
@@ -162,36 +159,26 @@ async def agent_status(ctx: RunContextWrapper, agent_id: str) -> str:
             ``create_agent``.
     """
     inner = _ctx(ctx)
-    bus = inner.get("bus")
-    if bus is None:
+    coordinator = coordinator_from_context(inner)
+    if coordinator is None:
         return json.dumps(
-            {"success": False, "error": "Bus not initialized in context."},
+            {"success": False, "error": "Agent coordinator not initialized in context."},
             ensure_ascii=False,
             default=str,
         )
 
-    async with bus._lock:
-        if agent_id not in bus.statuses:
-            return json.dumps(
-                {
-                    "success": False,
-                    "error": f"Unknown agent_id: {agent_id}",
-                },
-                ensure_ascii=False,
-                default=str,
-            )
+    info = await coordinator.agent_info(agent_id)
+    if info is None:
         return json.dumps(
             {
-                "success": True,
-                "agent_id": agent_id,
-                "name": bus.names.get(agent_id),
-                "status": bus.statuses.get(agent_id),
-                "parent_id": bus.parent_of.get(agent_id),
-                "pending_messages": len(bus.inboxes.get(agent_id, [])),
+                "success": False,
+                "error": f"Unknown agent_id: {agent_id}",
             },
             ensure_ascii=False,
             default=str,
         )
+    info["success"] = True
+    return json.dumps(info, ensure_ascii=False, default=str)
 
 
 @function_tool(timeout=30)
@@ -215,7 +202,8 @@ async def send_message_to_agent(
     **Don't** use for routine "hello/status" pings, for context the
     target already has (children inherit parent history), or when
     parent/child completion via ``agent_finish`` already covers the
-    flow. Messages to a finalized agent are dropped.
+    flow. Messages to any registered agent are queued, regardless of
+    status, so a follow-up can wake a completed/stopped/failed agent.
 
     Args:
         target_agent_id: Recipient's 8-char id.
@@ -227,39 +215,17 @@ async def send_message_to_agent(
         priority: ``low`` / ``normal`` / ``high`` / ``urgent``.
     """
     inner = _ctx(ctx)
-    bus = inner.get("bus")
+    coordinator = coordinator_from_context(inner)
     me = inner.get("agent_id")
-    if bus is None or me is None:
+    if coordinator is None or me is None:
         return json.dumps(
-            {"success": False, "error": "Bus or agent_id missing in context."},
-            ensure_ascii=False,
-            default=str,
-        )
-
-    async with bus._lock:
-        if target_agent_id not in bus.statuses:
-            return json.dumps(
-                {
-                    "success": False,
-                    "error": f"Target agent '{target_agent_id}' not found.",
-                },
-                ensure_ascii=False,
-                default=str,
-            )
-        target_status = bus.statuses.get(target_agent_id)
-
-    if target_status in ("completed", "crashed", "stopped"):
-        return json.dumps(
-            {
-                "success": False,
-                "error": f"Target agent '{target_agent_id}' is {target_status}; message dropped.",
-            },
+            {"success": False, "error": "Agent coordinator or agent_id missing in context."},
             ensure_ascii=False,
             default=str,
         )
 
     msg_id = f"msg_{uuid.uuid4().hex[:8]}"
-    await bus.send(
+    delivered = await coordinator.send(
         target_agent_id,
         {
             "id": msg_id,
@@ -269,6 +235,15 @@ async def send_message_to_agent(
             "priority": priority,
         },
     )
+    if not delivered:
+        return json.dumps(
+            {
+                "success": False,
+                "error": f"Target agent '{target_agent_id}' not found or message delivery failed.",
+            },
+            ensure_ascii=False,
+            default=str,
+        )
     return json.dumps(
         {
             "success": True,
@@ -281,9 +256,16 @@ async def send_message_to_agent(
     )
 
 
-# Tighter would burn CPU; slacker would feel laggy when a sibling
-# delivers a message right after the wait starts.
-_WAIT_POLL_SECONDS = 1.0
+def _session_items_payload(items: list[Any]) -> list[dict[str, Any]]:
+    payload: list[dict[str, Any]] = []
+    for item in items:
+        if isinstance(item, dict):
+            role = item.get("role")
+            content = item.get("content")
+            payload.append({"role": role, "content": content})
+        else:
+            payload.append({"content": str(item)})
+    return payload
 
 
 @function_tool(timeout=601)
@@ -319,51 +301,105 @@ async def wait_for_message(
             again.
     """
     inner = _ctx(ctx)
-    bus = inner.get("bus")
+    coordinator = coordinator_from_context(inner)
     me = inner.get("agent_id")
-    if bus is None or me is None:
+    interactive = bool(inner.get("interactive", False))
+    if coordinator is None or me is None:
         return json.dumps(
-            {"success": False, "error": "Bus or agent_id missing in context."},
+            {"success": False, "error": "Agent coordinator or agent_id missing in context."},
             ensure_ascii=False,
             default=str,
         )
 
-    async with bus._lock:
-        bus.statuses[me] = "waiting"
+    async with coordinator._lock:
+        stopped = coordinator.statuses.get(me) == "stopped"
+    if stopped:
+        return json.dumps(
+            {
+                "success": True,
+                "status": "stopped",
+                "reason": reason,
+                "note": "Wait ended because this agent is stopped.",
+            },
+            ensure_ascii=False,
+            default=str,
+        )
 
-    deadline = asyncio.get_event_loop().time() + timeout_seconds
+    pending = await coordinator.pending_count(me)
+    if pending > 0:
+        items = await coordinator.recent_session_items(me, pending)
+        await coordinator.consume_wake(me)
+        await coordinator.mark_running(me)
+        return json.dumps(
+            {
+                "success": True,
+                "status": "message_arrived",
+                "pending_messages": pending,
+                "messages": _session_items_payload(items),
+                "reason": reason,
+            },
+            ensure_ascii=False,
+            default=str,
+        )
+
+    if interactive:
+        await coordinator.park_waiting(me)
+        inner["agent_waiting_called"] = True
+        return json.dumps(
+            {
+                "success": True,
+                "status": "waiting",
+                "agent_waiting": True,
+                "reason": reason,
+                "note": "Agent parked; execution will resume when a message arrives.",
+            },
+            ensure_ascii=False,
+            default=str,
+        )
+
+    await coordinator.park_waiting(me)
     try:
-        while asyncio.get_event_loop().time() < deadline:
-            async with bus._lock:
-                pending = len(bus.inboxes.get(me, []))
-            if pending > 0:
-                async with bus._lock:
-                    bus.statuses[me] = "running"
-                return json.dumps(
-                    {
-                        "success": True,
-                        "status": "message_arrived",
-                        "pending_messages": pending,
-                        "reason": reason,
-                    },
-                    ensure_ascii=False,
-                    default=str,
-                )
-            await asyncio.sleep(_WAIT_POLL_SECONDS)
-    finally:
-        async with bus._lock:
-            # Don't clobber a status another writer set (e.g., on_agent_end
-            # finalized us as ``stopped`` mid-wait).
-            if bus.statuses.get(me) == "waiting":
-                bus.statuses[me] = "running"
+        await asyncio.wait_for(coordinator.wait_for_message(me), timeout_seconds)
+    except TimeoutError:
+        await coordinator.mark_running(me)
+        return json.dumps(
+            {
+                "success": True,
+                "status": "timeout",
+                "timeout_seconds": timeout_seconds,
+                "reason": reason,
+                "note": "No messages within timeout — continue work or call agent_finish.",
+            },
+            ensure_ascii=False,
+            default=str,
+        )
+
+    async with coordinator._lock:
+        stopped = coordinator.statuses.get(me) == "stopped"
+    if stopped:
+        return json.dumps(
+            {
+                "success": True,
+                "status": "stopped",
+                "reason": reason,
+                "note": "Wait ended because this agent is stopped.",
+            },
+            ensure_ascii=False,
+            default=str,
+        )
+
+    pending = await coordinator.pending_count(me)
+    items = await coordinator.recent_session_items(me, pending)
+    await coordinator.consume_wake(me)
+    await coordinator.mark_running(me)
 
     return json.dumps(
         {
             "success": True,
-            "status": "timeout",
-            "timeout_seconds": timeout_seconds,
+            "status": "message_arrived",
+            "pending_messages": pending,
+            "messages": _session_items_payload(items),
             "reason": reason,
-            "note": "No messages within timeout — continue work or call agent_finish.",
         },
         ensure_ascii=False,
         default=str,
@@ -418,13 +454,13 @@ async def create_agent(
         skills: Comma-separated skill names. Max 5; prefer 1-3.
     """
     inner = _ctx(ctx)
-    bus = inner.get("bus")
+    coordinator = coordinator_from_context(inner)
     parent_id = inner.get("agent_id")
     factory: Callable[..., SDKAgent] | None = inner.get("agent_factory")
 
-    if bus is None or parent_id is None:
+    if coordinator is None or parent_id is None:
         return json.dumps(
-            {"success": False, "error": "Bus or agent_id missing in context."},
+            {"success": False, "error": "Agent coordinator or agent_id missing in context."},
             ensure_ascii=False,
             default=str,
         )
@@ -456,7 +492,14 @@ async def create_agent(
             default=str,
         )
 
-    await bus.register(
+    tracer = inner.get("tracer")
+    if tracer is not None and hasattr(tracer, "get_run_dir"):
+        child_session_path = tracer.get_run_dir() / "sessions" / f"{child_id}.db"
+    else:
+        run_id = inner.get("run_id") or "default"
+        child_session_path = Path.cwd() / "strix_runs" / str(run_id) / "sessions" / f"{child_id}.db"
+
+    await coordinator.register(
         child_id,
         name,
         parent_id,
@@ -465,6 +508,7 @@ async def create_agent(
         is_whitebox=bool(inner.get("is_whitebox", False)),
         scan_mode=str(inner.get("scan_mode", "deep")),
         diff_scope=inner.get("diff_scope"),
+        session_path=child_session_path,
     )
 
     # ``ctx.turn_input`` carries the parent's full conversation up to and
@@ -501,7 +545,7 @@ async def create_agent(
     initial_input.append({"role": "user", "content": task})
 
     child_ctx: dict[str, Any] = {
-        "bus": bus,
+        "coordinator": coordinator,
         "sandbox_session": inner.get("sandbox_session"),
         "sandbox_client": inner.get("sandbox_client"),
         "caido_client": inner.get("caido_client"),
@@ -531,17 +575,11 @@ async def create_agent(
     # tracer's run_dir (root-side construction in
     # :func:`run_strix_scan`); fall back to ``./strix_runs/{run_id}/`` if
     # the tracer is absent (unit-test path).
-    tracer = inner.get("tracer")
-    if tracer is not None and hasattr(tracer, "get_run_dir"):
-        child_session_path = tracer.get_run_dir() / "sessions" / f"{child_id}.db"
-    else:
-        run_id = inner.get("run_id") or "default"
-        child_session_path = Path.cwd() / "strix_runs" / str(run_id) / "sessions" / f"{child_id}.db"
-    child_session_path.parent.mkdir(parents=True, exist_ok=True)
-    child_session = SQLiteSession(session_id=child_id, db_path=child_session_path)
+    child_session = open_agent_session(child_id, child_session_path)
     sessions_list = child_ctx.get("_sessions_to_close")
     if isinstance(sessions_list, list):
         sessions_list.append(child_session)
+    await coordinator.attach_runtime(child_id, session=child_session)
 
     child_model_settings = ModelSettings(
         parallel_tool_calls=False,
@@ -561,7 +599,6 @@ async def create_agent(
             if sandbox_session is not None
             else None
         ),
-        call_model_input_filter=inject_messages_filter,
         tracing_disabled=False,
         trace_include_sensitive_data=False,
     )
@@ -572,17 +609,15 @@ async def create_agent(
             initial_input=initial_input,
             run_config=child_run_config,
             context=child_ctx,
-            hooks=StrixOrchestrationHooks(),
             max_turns=int(inner.get("max_turns", 300)),
-            bus=bus,
+            coordinator=coordinator,
             agent_id=child_id,
             interactive=bool(inner.get("interactive", False)),
             session=child_session,
         ),
         name=f"agent-{name}-{child_id}",
     )
-    async with bus._lock:
-        bus.tasks[child_id] = task_handle
+    await coordinator.attach_runtime(child_id, task=task_handle)
 
     logger.info(
         "create_agent: spawned %s (%s) parent=%s skills=%d task_len=%d",
@@ -650,11 +685,11 @@ async def agent_finish(
             cover Y").
     """
     inner = _ctx(ctx)
-    bus = inner.get("bus")
+    coordinator = coordinator_from_context(inner)
     me = inner.get("agent_id")
-    if bus is None or me is None:
+    if coordinator is None or me is None:
         return json.dumps(
-            {"success": False, "error": "Bus or agent_id missing in context."},
+            {"success": False, "error": "Agent coordinator or agent_id missing in context."},
             ensure_ascii=False,
             default=str,
         )
@@ -674,13 +709,14 @@ async def agent_finish(
             default=str,
         )
 
-    # ``agent_finish_called`` is set by ``StrixOrchestrationHooks.on_tool_end``;
-    # no need to set it here.
+    # The coordinator settles lifecycle from this JSON final output after
+    # the SDK run finishes; the tool only sends the parent report.
+    inner["agent_finish_called"] = True
 
     parent_notified = False
     if report_to_parent:
-        async with bus._lock:
-            agent_name = bus.names.get(me, me)
+        async with coordinator._lock:
+            agent_name = coordinator.names.get(me, me)
         report = _render_completion_report(
             agent_name=agent_name,
             agent_id=me,
@@ -690,7 +726,7 @@ async def agent_finish(
             findings=list(findings or []),
             recommendations=list(final_recommendations or []),
         )
-        await bus.send(
+        await coordinator.send(
             parent_id,
             {
                 "id": f"report_{uuid.uuid4().hex[:8]}",
@@ -737,8 +773,8 @@ async def stop_agent(
     Uses the SDK's ``RunResultStreaming.cancel(mode="after_turn")`` so the
     target's current turn finishes — including saving items to its
     session — before the run loop honors the cancel. The agent's
-    interactive outer loop sees ``stopping`` and exits without awaiting
-    more messages, so ``on_agent_end`` finalizes with status="stopped".
+    interactive outer loop parks as ``stopped``; later user/peer
+    messages can wake it again.
 
     Use sparingly. Prefer ``send_message_to_agent`` (asking the agent
     to wrap up) for soft-stop scenarios. Reach for ``stop_agent`` when
@@ -754,11 +790,11 @@ async def stop_agent(
             in logs and telemetry.
     """
     inner = _ctx(ctx)
-    bus = inner.get("bus")
+    coordinator = coordinator_from_context(inner)
     me = inner.get("agent_id")
-    if bus is None or me is None:
+    if coordinator is None or me is None:
         return json.dumps(
-            {"success": False, "error": "Bus or agent_id missing in context."},
+            {"success": False, "error": "Agent coordinator or agent_id missing in context."},
             ensure_ascii=False,
             default=str,
         )
@@ -771,31 +807,17 @@ async def stop_agent(
             ensure_ascii=False,
             default=str,
         )
-    async with bus._lock:
-        if target_agent_id not in bus.statuses:
-            return json.dumps(
-                {"success": False, "error": f"Unknown agent_id: {target_agent_id}"},
-                ensure_ascii=False,
-                default=str,
-            )
-        target_status = bus.statuses.get(target_agent_id)
-
-    if target_status in ("completed", "crashed", "stopped"):
+    if await coordinator.agent_info(target_agent_id) is None:
         return json.dumps(
-            {
-                "success": False,
-                "error": f"Target agent '{target_agent_id}' is already {target_status}.",
-            },
+            {"success": False, "error": f"Unknown agent_id: {target_agent_id}"},
             ensure_ascii=False,
             default=str,
         )
 
     if cascade:
-        await bus.cancel_descendants_graceful(target_agent_id)
+        await coordinator.cancel_descendants_graceful(target_agent_id)
     else:
-        async with bus._lock:
-            bus.stopping.add(target_agent_id)
-        await bus.request_interrupt(target_agent_id, mode="after_turn")
+        await coordinator.request_stop(target_agent_id)
 
     logger.info(
         "stop_agent: target=%s cascade=%s reason=%r",

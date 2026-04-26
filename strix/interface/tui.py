@@ -708,12 +708,11 @@ class StrixTUIApp(App):  # type: ignore[misc]
         self.tracer.set_scan_config(self.scan_config)
         set_global_tracer(self.tracer)
 
-        # Pre-create the bus here (rather than letting ``run_strix_scan``
-        # build its own) so the TUI can hold a handle for stop / chat
-        # routing while the scan loop runs in a worker thread.
-        from strix.orchestration.bus import AgentMessageBus
+        # Pre-create the coordinator here so the TUI can route stop/chat
+        # commands while the scan loop runs in a worker thread.
+        from strix.orchestration.coordinator import AgentCoordinator
 
-        self.bus: AgentMessageBus = AgentMessageBus()
+        self.coordinator = AgentCoordinator()
 
         self.agent_nodes: dict[str, TreeNode] = {}
 
@@ -938,7 +937,6 @@ class StrixTUIApp(App):  # type: ignore[misc]
                 "completed": "🟢",
                 "failed": "🔴",
                 "stopped": "■",
-                "stopping": "○",
                 "llm_failed": "🔴",
             }
 
@@ -1108,7 +1106,6 @@ class StrixTUIApp(App):  # type: ignore[misc]
             return t
 
         simple_statuses: dict[str, tuple[str, str]] = {
-            "stopping": ("Agent stopping...", ""),
             "stopped": ("Agent stopped", ""),
             "completed": ("Agent completed", ""),
         }
@@ -1402,7 +1399,7 @@ class StrixTUIApp(App):  # type: ignore[misc]
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
                 # Stash the loop so synchronous TUI handlers (stop /
-                # chat) can submit bus coroutines onto it from the
+                # chat) can submit coordinator coroutines onto it from the
                 # main thread.
                 self._scan_loop = loop
 
@@ -1416,7 +1413,7 @@ class StrixTUIApp(App):  # type: ignore[misc]
                                 image=str(image),
                                 local_sources=getattr(self.args, "local_sources", None) or [],
                                 tracer=self.tracer,
-                                bus=self.bus,
+                                coordinator=self.coordinator,
                                 interactive=True,
                             ),
                         )
@@ -1473,7 +1470,6 @@ class StrixTUIApp(App):  # type: ignore[misc]
             "completed": "🟢",
             "failed": "🔴",
             "stopped": "■",
-            "stopping": "○",
             "llm_failed": "🔴",
         }
 
@@ -1546,7 +1542,6 @@ class StrixTUIApp(App):  # type: ignore[misc]
             "completed": "🟢",
             "failed": "🔴",
             "stopped": "■",
-            "stopping": "○",
             "llm_failed": "🔴",
         }
 
@@ -1730,7 +1725,7 @@ class StrixTUIApp(App):  # type: ignore[misc]
                 agent_id=self.selected_agent_id,
             )
 
-        # Route to the agent's bus inbox. The scan loop runs on a
+        # Route to the agent's SDK session. The scan loop runs on a
         # worker thread; ``run_coroutine_threadsafe`` submits the
         # coroutine onto that loop and returns immediately so the TUI
         # stays responsive. After enqueuing the message, request a
@@ -1741,14 +1736,14 @@ class StrixTUIApp(App):  # type: ignore[misc]
         if self._scan_loop is not None and not self._scan_loop.is_closed():
             target_agent_id = self.selected_agent_id
             asyncio.run_coroutine_threadsafe(
-                self.bus.send(
+                self.coordinator.send(
                     target_agent_id,
                     {"from": "user", "content": message, "type": "instruction"},
                 ),
                 self._scan_loop,
             )
             asyncio.run_coroutine_threadsafe(
-                self.bus.request_interrupt(target_agent_id, mode="after_turn"),
+                self.coordinator.request_interrupt(target_agent_id, mode="after_turn"),
                 self._scan_loop,
             )
 
@@ -1832,7 +1827,7 @@ class StrixTUIApp(App):  # type: ignore[misc]
                 agent_name = agent_data.get("name", "Unknown Agent")
 
                 agent_status = agent_data.get("status", "running")
-                if agent_status not in ["running"]:
+                if agent_status not in ["running", "waiting", "llm_failed"]:
                     return agent_name, False
 
                 agent_events = self._gather_agent_events(self.selected_agent_id)
@@ -1849,7 +1844,7 @@ class StrixTUIApp(App):  # type: ignore[misc]
     def action_confirm_stop_agent(self, agent_id: str) -> None:
         # Graceful stop: each agent's current turn finishes (and is saved to
         # session) before the run loop honors the cancel. The interactive
-        # outer loop sees ``stopping`` and exits with status="stopped".
+        # outer loop parks with status="stopped".
         # The hard ``cancel_descendants`` path remains for KeyboardInterrupt
         # in entry.py where graceful isn't possible.
         if self._scan_loop is None or self._scan_loop.is_closed():
@@ -1857,7 +1852,7 @@ class StrixTUIApp(App):  # type: ignore[misc]
             return
         logger.info("TUI: graceful stop requested for %s (cascade)", agent_id)
         asyncio.run_coroutine_threadsafe(
-            self.bus.cancel_descendants_graceful(agent_id),
+            self.coordinator.cancel_descendants_graceful(agent_id),
             self._scan_loop,
         )
 

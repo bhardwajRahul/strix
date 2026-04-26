@@ -6,11 +6,10 @@ Jinja prompt into one ``agents.Agent`` ready for ``Runner.run``.
 Two flavors:
 
 - **Root** (``is_root=True``): top-level scan agent. Carries
-  ``finish_scan`` and stops there.
+  ``finish_scan`` and stops after that tool reports ``scan_completed``.
 - **Child** (``is_root=False``): subagents spawned by the
   ``create_agent`` graph tool. Carries ``agent_finish`` and stops
-  there — without ``stop_at_tool_names`` the SDK loop would keep
-  running to ``max_turns`` even after the child reported back.
+  after that tool reports ``agent_completed``.
 
 Skills are baked into the system prompt at scan bring-up; there's no
 runtime skill-loading tool.
@@ -18,10 +17,11 @@ runtime skill-loading tool.
 
 from __future__ import annotations
 
+import json
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from agents.agent import StopAtTools
+from agents.agent import ToolsToFinalOutputResult
 from agents.sandbox import SandboxAgent
 from agents.sandbox.capabilities import Filesystem, Shell
 from agents.tool import Tool
@@ -65,7 +65,66 @@ from strix.tools.todo.tools import (
 from strix.tools.web_search.tool import web_search
 
 
+if TYPE_CHECKING:
+    from agents import RunContextWrapper
+    from agents.tool import FunctionToolResult
+
+
 logger = logging.getLogger(__name__)
+
+
+def _lifecycle_tool_completed(tool_name: str, output: Any) -> bool:
+    if tool_name == "agent_finish":
+        completion_key = "agent_completed"
+    elif tool_name == "finish_scan":
+        completion_key = "scan_completed"
+    else:
+        return False
+
+    if not isinstance(output, str):
+        return False
+    try:
+        parsed = json.loads(output)
+    except (TypeError, ValueError):
+        return False
+    return bool(isinstance(parsed, dict) and parsed.get("success") and parsed.get(completion_key))
+
+
+def _wait_tool_parked(tool_name: str, output: Any) -> bool:
+    if tool_name != "wait_for_message" or not isinstance(output, str):
+        return False
+    try:
+        parsed = json.loads(output)
+    except (TypeError, ValueError):
+        return False
+    return bool(
+        isinstance(parsed, dict)
+        and parsed.get("success")
+        and parsed.get("agent_waiting")
+        and parsed.get("status") == "waiting"
+    )
+
+
+def _finish_tool_use_behavior(
+    ctx: RunContextWrapper[Any],
+    tool_results: list[FunctionToolResult],
+) -> ToolsToFinalOutputResult:
+    """Stop only after a lifecycle tool reports successful completion."""
+    interactive = (
+        bool(ctx.context.get("interactive", False)) if isinstance(ctx.context, dict) else False
+    )
+    for tool_result in tool_results:
+        if _lifecycle_tool_completed(tool_result.tool.name, tool_result.output):
+            return ToolsToFinalOutputResult(
+                is_final_output=True,
+                final_output=tool_result.output,
+            )
+        if interactive and _wait_tool_parked(tool_result.tool.name, tool_result.output):
+            return ToolsToFinalOutputResult(
+                is_final_output=True,
+                final_output=tool_result.output,
+            )
+    return ToolsToFinalOutputResult(is_final_output=False, final_output=None)
 
 
 # Host-side Strix tools. Sandbox shell + filesystem are added per-run
@@ -102,7 +161,7 @@ _BASE_TOOLS: tuple[Tool, ...] = (
     scope_rules,
     # Stateless Python execution with proxy helpers pre-bound
     python_action,
-    # Multi-agent graph tools (the bus is in ctx.context)
+    # Multi-agent graph tools (the coordinator is in ctx.context)
     view_agent_graph,
     agent_status,
     send_message_to_agent,
@@ -132,13 +191,13 @@ def build_strix_agent(
     Responses API only).
 
     Args:
-        name: Agent name. Surfaces in traces and the bus's ``names`` map.
+        name: Agent name. Surfaces in traces and the coordinator's ``names`` map.
             Defaults to ``"strix"`` for the root; create_agent passes
             distinct names per child.
         skills: Skills to preload into the system prompt.
         is_root: Selects the tool list and ``tool_use_behavior``.
-            Root carries ``finish_scan`` and stops there; child carries
-            ``agent_finish`` and stops there.
+            Root carries ``finish_scan`` and child carries ``agent_finish``;
+            the run only stops when the lifecycle tool result succeeds.
         scan_mode: ``"deep"`` etc.; routes the scan-mode skill section
             of the prompt template.
         is_whitebox: Whitebox source-aware mode toggle. Adds two extra
@@ -161,10 +220,8 @@ def build_strix_agent(
 
     if is_root:
         tools: list[Tool] = [*_BASE_TOOLS, finish_scan]
-        stop_at = ("finish_scan",)
     else:
         tools = [*_BASE_TOOLS, agent_finish]
-        stop_at = ("agent_finish",)
 
     logger.info(
         "Built %s agent '%s' (skills=%d, tools=%d, scan_mode=%s, whitebox=%s)",
@@ -180,7 +237,7 @@ def build_strix_agent(
         name=name,
         instructions=instructions,
         tools=tools,
-        tool_use_behavior=StopAtTools(stop_at_tool_names=list(stop_at)),
+        tool_use_behavior=_finish_tool_use_behavior,
         # model=None so ``RunConfig.model`` drives provider selection
         # via :func:`build_multi_provider` rather than the SDK's default.
         model=None,
