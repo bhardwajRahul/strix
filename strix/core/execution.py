@@ -370,6 +370,8 @@ async def _run_cycle(
         logger.exception("agent run failed for %s; parking as %s", agent_id, status)
         await coordinator.set_status(agent_id, status)
         await _notify_parent_on_crash(coordinator, agent_id, status)
+        if context.get("parent_id") is None and status in {"failed", "crashed"}:
+            raise
         return None
     else:
         await _settle_run_result(coordinator, agent_id, interactive)

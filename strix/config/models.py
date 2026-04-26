@@ -96,3 +96,11 @@ def normalize_model_name(model_name: str) -> str:
         return f"litellm/gemini/{model}"
 
     return model
+
+
+def uses_chat_completions_tool_schema(model_name: str, settings: Settings) -> bool:
+    """Return whether the resolved SDK route can only receive JSON function tools."""
+    model = model_name.strip().lower()
+    if model.startswith(("litellm/", "any-llm/")):
+        return True
+    return bool(settings.llm.api_base)

@@ -17,6 +17,8 @@ runtime skill-loading tool.
 
 from __future__ import annotations
 
+import copy
+import inspect
 import json
 import logging
 from typing import TYPE_CHECKING, Any
@@ -24,7 +26,7 @@ from typing import TYPE_CHECKING, Any
 from agents.agent import ToolsToFinalOutputResult
 from agents.sandbox import SandboxAgent
 from agents.sandbox.capabilities import Filesystem, Shell
-from agents.tool import Tool
+from agents.tool import CustomTool, FunctionTool, Tool
 
 from strix.agents.prompt import render_system_prompt
 from strix.tools.agents_graph.tools import (
@@ -65,11 +67,125 @@ from strix.tools.web_search.tool import web_search
 
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
     from agents import RunContextWrapper
     from agents.tool import FunctionToolResult
 
 
 logger = logging.getLogger(__name__)
+
+
+_CUSTOM_TOOL_INPUT_FIELD_BY_NAME = {
+    "apply_patch": "patch",
+}
+_DEFAULT_CUSTOM_TOOL_INPUT_FIELD = "input"
+
+
+def _custom_tool_input_field(tool: CustomTool) -> str:
+    return _CUSTOM_TOOL_INPUT_FIELD_BY_NAME.get(tool.name, _DEFAULT_CUSTOM_TOOL_INPUT_FIELD)
+
+
+def _raw_input_schema(tool: CustomTool) -> dict[str, Any]:
+    input_field = _custom_tool_input_field(tool)
+    return {
+        "type": "object",
+        "properties": {
+            input_field: {
+                "type": "string",
+                "description": (
+                    f"Complete `{tool.name}` payload. Follow the tool description exactly."
+                ),
+            },
+        },
+        "required": [input_field],
+        "additionalProperties": False,
+    }
+
+
+def _extract_custom_input(tool: CustomTool, raw_input: str | dict[str, Any]) -> str:
+    if isinstance(raw_input, str):
+        try:
+            parsed = json.loads(raw_input)
+        except json.JSONDecodeError:
+            return ""
+    else:
+        parsed = raw_input
+    value = parsed.get(_custom_tool_input_field(tool))
+    return value if isinstance(value, str) else ""
+
+
+def _format_tool_error(exc: Exception) -> str:
+    return str(exc) or exc.__class__.__name__
+
+
+def _function_tool_with_error_result(tool: FunctionTool) -> FunctionTool:
+    safe_tool = copy.copy(tool)
+    invoke_tool = safe_tool.on_invoke_tool
+
+    async def invoke(ctx: Any, raw_input: str) -> Any:
+        try:
+            return await invoke_tool(ctx, raw_input)
+        except Exception as exc:  # noqa: BLE001 - tool errors should be model-visible results.
+            logger.debug("Tool %s failed; returning error as result", tool.name, exc_info=True)
+            return _format_tool_error(exc)
+
+    safe_tool.on_invoke_tool = invoke
+    return safe_tool
+
+
+def _custom_tool_as_function_tool(tool: CustomTool) -> FunctionTool:
+    """Expose an SDK raw-input custom tool through Chat-Completions function calling."""
+
+    async def invoke(ctx: Any, raw_input: str) -> Any:
+        custom_input = _extract_custom_input(tool, raw_input)
+        if not custom_input:
+            return f"`{_custom_tool_input_field(tool)}` must be a non-empty string."
+        try:
+            return await tool.on_invoke_tool(ctx, custom_input)
+        except Exception as exc:  # noqa: BLE001 - matches SDK CustomTool error-as-result behavior.
+            logger.debug("Tool %s failed; returning error as result", tool.name, exc_info=True)
+            return _format_tool_error(exc)
+
+    needs_approval = tool.runtime_needs_approval()
+    function_needs_approval: bool | Callable[[Any, dict[str, Any], str], Awaitable[bool]]
+    if callable(needs_approval):
+
+        async def approve(ctx: Any, args: dict[str, Any], call_id: str) -> bool:
+            result = needs_approval(ctx, _extract_custom_input(tool, args), call_id)
+            if inspect.isawaitable(result):
+                result = await result
+            return bool(result)
+
+        function_needs_approval = approve
+    else:
+        function_needs_approval = needs_approval
+
+    return FunctionTool(
+        name=tool.name,
+        description=(
+            f"{tool.description}\n\n"
+            f"Pass the complete `{tool.name}` payload in `{_custom_tool_input_field(tool)}`."
+        ),
+        params_json_schema=_raw_input_schema(tool),
+        on_invoke_tool=invoke,
+        strict_json_schema=False,
+        needs_approval=function_needs_approval,
+    )
+
+
+def _configure_chat_completions_filesystem_tools(toolset: Any) -> None:
+    for name, tool in vars(toolset).items():
+        if isinstance(tool, CustomTool):
+            setattr(toolset, name, _custom_tool_as_function_tool(tool))
+        elif isinstance(tool, FunctionTool):
+            setattr(toolset, name, _function_tool_with_error_result(tool))
+
+
+def _configure_chat_completions_shell_tools(toolset: Any) -> None:
+    for name, tool in vars(toolset).items():
+        if isinstance(tool, FunctionTool):
+            setattr(toolset, name, _function_tool_with_error_result(tool))
 
 
 def _lifecycle_tool_completed(tool_name: str, output: Any) -> bool:
@@ -177,6 +293,7 @@ def build_strix_agent(
     scan_mode: str = "deep",
     is_whitebox: bool = False,
     interactive: bool = False,
+    chat_completions_tools: bool = False,
     system_prompt_context: dict[str, Any] | None = None,
 ) -> SandboxAgent[Any]:
     """Build a ``SandboxAgent`` configured for either root or child use.
@@ -203,6 +320,8 @@ def build_strix_agent(
             the create_agent / wiki integration.
         interactive: Renders the interactive-mode communication block
             in the system prompt.
+        chat_completions_tools: Wrap SDK custom tools as function tools
+            when the selected backend cannot accept Responses custom tools.
         system_prompt_context: Free-form dict the prompt template
             renders into the ``system_prompt_context`` variable —
             today carries the scan scope / authorization block.
@@ -244,7 +363,18 @@ def build_strix_agent(
         # model=None so ``RunConfig.model`` drives provider selection
         # through the SDK's default MultiProvider.
         model=None,
-        capabilities=[Filesystem(), Shell()],
+        capabilities=[
+            Filesystem(
+                configure_tools=(
+                    _configure_chat_completions_filesystem_tools if chat_completions_tools else None
+                ),
+            ),
+            Shell(
+                configure_tools=(
+                    _configure_chat_completions_shell_tools if chat_completions_tools else None
+                ),
+            ),
+        ],
     )
 
 
@@ -253,6 +383,7 @@ def make_child_factory(
     scan_mode: str = "deep",
     is_whitebox: bool = False,
     interactive: bool = False,
+    chat_completions_tools: bool = False,
     system_prompt_context: dict[str, Any] | None = None,
 ) -> Any:
     """Return the runner-owned builder used by ``spawn_child_agent``.
@@ -270,6 +401,7 @@ def make_child_factory(
             scan_mode=scan_mode,
             is_whitebox=is_whitebox,
             interactive=interactive,
+            chat_completions_tools=chat_completions_tools,
             system_prompt_context=system_prompt_context,
         )
 

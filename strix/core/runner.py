@@ -19,7 +19,11 @@ from agents.sandbox import SandboxRunConfig
 
 from strix.agents.factory import build_strix_agent, make_child_factory
 from strix.config import load_settings
-from strix.config.models import configure_sdk_model_defaults, normalize_model_name
+from strix.config.models import (
+    configure_sdk_model_defaults,
+    normalize_model_name,
+    uses_chat_completions_tool_schema,
+)
 from strix.core.agents import AgentCoordinator
 from strix.core.execution import (
     respawn_subagents,
@@ -99,6 +103,7 @@ async def run_strix_scan(
             "No LLM model configured. Set STRIX_LLM env or pass model= to run_strix_scan().",
         )
     logger.info("LLM model resolved: %s", resolved_model)
+    chat_completions_tools = uses_chat_completions_tool_schema(resolved_model, settings)
 
     # Caller may pre-create the coordinator so it can route stop/chat
     # commands while the scan loop runs in another thread.
@@ -178,6 +183,7 @@ async def run_strix_scan(
             scan_mode=scan_mode,
             is_whitebox=is_whitebox,
             interactive=interactive,
+            chat_completions_tools=chat_completions_tools,
             system_prompt_context=scope_context,
         )
 
@@ -194,6 +200,7 @@ async def run_strix_scan(
             scan_mode=scan_mode,
             is_whitebox=is_whitebox,
             interactive=interactive,
+            chat_completions_tools=chat_completions_tools,
             system_prompt_context=scope_context,
         )
 
