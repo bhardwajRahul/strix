@@ -5,6 +5,7 @@ import contextlib
 import json
 import logging
 import signal
+import sqlite3
 import sys
 import threading
 from collections.abc import Callable
@@ -674,6 +675,39 @@ class TuiLiveView:
                 parent_id=parent_of.get(agent_id) if isinstance(parent_of, dict) else None,
                 status=str(status),
             )
+        self._hydrate_sdk_session_history(run_dir, statuses.keys())
+
+    def _hydrate_sdk_session_history(self, run_dir: Path, agent_ids: Any) -> None:
+        agents_db = run_dir / "agents.db"
+        session_ids = [aid for aid in agent_ids if isinstance(aid, str)]
+        if not agents_db.exists() or not session_ids:
+            return
+        session_id_set = set(session_ids)
+        try:
+            with sqlite3.connect(agents_db) as conn:
+                rows = conn.execute(
+                    "select id, session_id, message_data, created_at "
+                    "from agent_messages order by id"
+                ).fetchall()
+        except sqlite3.Error:
+            logger.exception("Failed to hydrate TUI history from %s", agents_db)
+            return
+
+        for row_id, agent_id, message_data, created_at in rows:
+            if agent_id not in session_id_set:
+                continue
+            try:
+                item = json.loads(message_data)
+            except (TypeError, json.JSONDecodeError):
+                logger.debug("Skipping unreadable SDK session item %s for %s", row_id, agent_id)
+                continue
+            if not isinstance(item, dict):
+                continue
+            self._ingest_session_history_item(
+                str(agent_id),
+                item,
+                timestamp=_sqlite_timestamp_to_iso(created_at),
+            )
 
     def upsert_agent(
         self,
@@ -747,6 +781,53 @@ class TuiLiveView:
             if delta:
                 self._record_assistant_message(agent_id, str(delta), final=False)
 
+    def _ingest_session_history_item(
+        self,
+        agent_id: str,
+        item: dict[str, Any],
+        *,
+        timestamp: str,
+    ) -> None:
+        item_type = item.get("type")
+        role = item.get("role")
+        if role in {"user", "assistant"} and (item_type in {None, "message"}):
+            content = _session_message_text(item)
+            if content:
+                self._append_event(
+                    agent_id,
+                    "chat",
+                    {
+                        "role": role,
+                        "content": content,
+                        "metadata": {"source": "sdk_session"},
+                    },
+                    timestamp=timestamp,
+                )
+            return
+
+        if item_type == "function_call":
+            self._record_tool_call_data(
+                agent_id,
+                {
+                    "call_id": str(item.get("call_id") or item.get("id") or ""),
+                    "tool_name": str(item.get("name") or "tool"),
+                    "args": _parse_json_object(item.get("arguments")),
+                },
+                timestamp=timestamp,
+            )
+            return
+
+        if item_type == "function_call_output":
+            self._record_tool_output_data(
+                agent_id,
+                {
+                    "call_id": str(item.get("call_id") or item.get("id") or ""),
+                    "tool_name": "tool",
+                    "output": item.get("output"),
+                },
+                timestamp=timestamp,
+            )
+
     def _record_assistant_message(self, agent_id: str, content: str, *, final: bool) -> None:
         if not content:
             return
@@ -775,7 +856,15 @@ class TuiLiveView:
         self._bump_event(existing)
 
     def _record_tool_call(self, agent_id: str, item: Any) -> None:
-        call = _sdk_tool_call_data(item)
+        self._record_tool_call_data(agent_id, _sdk_tool_call_data(item))
+
+    def _record_tool_call_data(
+        self,
+        agent_id: str,
+        call: dict[str, Any],
+        *,
+        timestamp: str | None = None,
+    ) -> None:
         call_id = call["call_id"]
         existing = self._tool_event_by_call_id.get(call_id)
         tool_data = {
@@ -786,14 +875,22 @@ class TuiLiveView:
             "call_id": call_id,
         }
         if existing is None:
-            event = self._append_event(agent_id, "tool", tool_data)
+            event = self._append_event(agent_id, "tool", tool_data, timestamp=timestamp)
             self._tool_event_by_call_id[call_id] = event
         else:
             existing["data"].update(tool_data)
-            self._bump_event(existing)
+            self._bump_event(existing, timestamp=timestamp)
 
     def _record_tool_output(self, agent_id: str, item: Any) -> None:
-        output = _sdk_tool_output_data(item)
+        self._record_tool_output_data(agent_id, _sdk_tool_output_data(item))
+
+    def _record_tool_output_data(
+        self,
+        agent_id: str,
+        output: dict[str, Any],
+        *,
+        timestamp: str | None = None,
+    ) -> None:
         call_id = output["call_id"]
         event = self._tool_event_by_call_id.get(call_id)
         if event is None:
@@ -807,20 +904,28 @@ class TuiLiveView:
                     "agent_id": agent_id,
                     "call_id": call_id,
                 },
+                timestamp=timestamp,
             )
             self._tool_event_by_call_id[call_id] = event
 
         result = _parse_json_value(output["output"])
         event["data"]["result"] = result
         event["data"]["status"] = _tool_status_from_result(result)
-        self._bump_event(event)
+        self._bump_event(event, timestamp=timestamp)
 
-    def _append_event(self, agent_id: str, event_type: str, data: dict[str, Any]) -> dict[str, Any]:
+    def _append_event(
+        self,
+        agent_id: str,
+        event_type: str,
+        data: dict[str, Any],
+        *,
+        timestamp: str | None = None,
+    ) -> dict[str, Any]:
         event = {
             "id": f"{event_type}_{self._next_event_id}",
             "type": event_type,
             "agent_id": agent_id,
-            "timestamp": datetime.now(UTC).isoformat(),
+            "timestamp": timestamp or datetime.now(UTC).isoformat(),
             "version": 0,
             "data": data,
         }
@@ -829,9 +934,9 @@ class TuiLiveView:
         return event
 
     @staticmethod
-    def _bump_event(event: dict[str, Any]) -> None:
+    def _bump_event(event: dict[str, Any], *, timestamp: str | None = None) -> None:
         event["version"] = int(event.get("version", 0)) + 1
-        event["timestamp"] = datetime.now(UTC).isoformat()
+        event["timestamp"] = timestamp or datetime.now(UTC).isoformat()
 
 
 def _sdk_tool_call_data(item: Any) -> dict[str, Any]:
@@ -859,10 +964,20 @@ def _sdk_tool_output_data(item: Any) -> dict[str, Any]:
 
 def _sdk_message_text(item: Any) -> str:
     raw = getattr(item, "raw_item", None)
-    content = _raw_field(raw, "content", [])
+    return _message_content_text(_raw_field(raw, "content", []))
+
+
+def _session_message_text(item: dict[str, Any]) -> str:
+    return _message_content_text(item.get("content", ""))
+
+
+def _message_content_text(content: Any) -> str:
     parts: list[str] = []
     content_items = content if isinstance(content, list) else [content]
     for part in content_items:
+        if isinstance(part, str):
+            parts.append(part)
+            continue
         text = _raw_field(part, "text")
         if isinstance(text, str):
             parts.append(text)
@@ -893,6 +1008,19 @@ def _tool_status_from_result(result: Any) -> str:
     if isinstance(result, dict) and result.get("success") is False:
         return "failed"
     return "completed"
+
+
+def _sqlite_timestamp_to_iso(value: Any) -> str:
+    if not isinstance(value, str) or not value.strip():
+        return datetime.now(UTC).isoformat()
+    text = value.strip()
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return text
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC).isoformat()
 
 
 class QuitScreen(ModalScreen):  # type: ignore[misc]

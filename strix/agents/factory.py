@@ -236,11 +236,11 @@ def build_strix_agent(
         instructions=instructions,
         tools=tools,
         tool_use_behavior=_finish_tool_use_behavior,
-        # Autonomous Strix runs must keep forcing tool calls after each
-        # tool result; otherwise the SDK resets tool_choice to auto and a
-        # plain-text model response can become final output before
-        # finish_scan / agent_finish.
-        reset_tool_choice=False,
+        # Non-interactive runs must keep forcing tool calls until the
+        # lifecycle tool completes. Interactive runs need the SDK default
+        # reset so a tool-assisted answer can end as plain text instead of
+        # looping through think/list_todos forever.
+        reset_tool_choice=interactive,
         # model=None so ``RunConfig.model`` drives provider selection
         # via :func:`build_multi_provider` rather than the SDK's default.
         model=None,
