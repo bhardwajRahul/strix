@@ -26,12 +26,12 @@ from strix.agents.factory import build_strix_agent, make_child_factory
 from strix.config import load_settings
 from strix.orchestration.bus import AgentMessageBus
 from strix.orchestration.hooks import StrixOrchestrationHooks
+from strix.orchestration.run_loop import run_with_continuation
 from strix.run_config_factory import (
     STRIX_DEFAULT_MAX_TURNS,
     make_agent_context,
     make_run_config,
 )
-from strix.run_loop import run_with_continuation
 from strix.runtime import session_manager
 
 

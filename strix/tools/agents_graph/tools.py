@@ -25,8 +25,8 @@ from agents import RunContextWrapper, function_tool
 from agents.items import TResponseInputItem
 
 from strix.orchestration.hooks import StrixOrchestrationHooks
+from strix.orchestration.run_loop import run_with_continuation
 from strix.run_config_factory import make_agent_context, make_run_config
-from strix.run_loop import run_with_continuation
 
 
 if TYPE_CHECKING:
