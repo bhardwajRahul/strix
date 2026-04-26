@@ -32,7 +32,8 @@ RUN apt-get update && \
     nodejs npm pipx \
     libcap2-bin \
     gdb \
-    libnss3-tools
+    libnss3-tools \
+    chromium fonts-liberation
 
 
 RUN setcap cap_net_raw,cap_net_admin,cap_net_bind_service+eip $(which nmap)
@@ -94,11 +95,11 @@ RUN npm install -g retire@latest && \
     npm install -g tree-sitter-cli@latest && \
     npm install -g agent-browser@0.26.0
 
-USER root
-RUN agent-browser install --with-deps
-
 USER pentester
-RUN agent-browser install && agent-browser doctor --offline --quick
+ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
+ENV AGENT_BROWSER_USER_AGENT="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+ENV AGENT_BROWSER_ARGS="--disable-blink-features=AutomationControlled --exclude-switches=enable-automation --disable-features=IsolateOrigins,site-per-process,Translate,BlinkGenPropertyTrees --no-first-run --no-default-browser-check --window-size=1920,1080 --lang=en-US,en --disable-infobars --disable-notifications --disable-save-password-bubble --disable-session-crashed-bubble"
+RUN /home/pentester/.npm-global/bin/agent-browser doctor --offline --quick
 
 RUN set -eux; \
     TS_PARSER_DIR="/home/pentester/.tree-sitter/parsers"; \
