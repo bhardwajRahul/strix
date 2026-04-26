@@ -86,14 +86,21 @@ async def finish_scan(
     2. Writes the four narrative sections to the scan record.
     3. Marks the scan completed and stops execution.
 
-    **Pre-flight checklist:**
+    **Pre-flight checklist (mandatory — do not skip):**
 
-    - All vulnerabilities you found are filed via
-      ``create_vulnerability_report`` (un-reported findings are not
-      tracked and not credited).
-    - All subagents have terminated. If any are still ``running`` /
-      ``stopping``, message them or use ``wait_for_message``.
-    - Don't double-report — one report per distinct vulnerability.
+    1. **Call ``view_agent_graph`` first.** Inspect every entry in the
+       summary. If ANY agent is in ``running`` / ``waiting`` /
+       ``llm_failed`` state, you MUST NOT call ``finish_scan`` yet —
+       wrap them up first via ``send_message_to_agent`` (ask them to
+       finish), ``wait_for_message`` (block until their report
+       arrives), or ``stop_agent`` (graceful cancel). Only ``completed``
+       / ``crashed`` / ``stopped`` agents are safe to leave behind.
+       Calling ``finish_scan`` while children are alive orphans their
+       work and produces an incomplete report.
+    2. All vulnerabilities you found are filed via
+       ``create_vulnerability_report`` (un-reported findings are not
+       tracked and not credited).
+    3. Don't double-report — one report per distinct vulnerability.
 
     **Calling this multiple times overwrites the previous report.**
     Make the single call comprehensive.
