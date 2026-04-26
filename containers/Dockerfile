@@ -168,6 +168,7 @@ ENV VIRTUAL_ENV="/app/.venv"
 
 WORKDIR /app
 
+ARG CAIDO_VERSION=0.56.0
 RUN ARCH=$(uname -m) && \
     if [ "$ARCH" = "x86_64" ]; then \
         CAIDO_ARCH="x86_64"; \
@@ -176,7 +177,7 @@ RUN ARCH=$(uname -m) && \
     else \
         echo "Unsupported architecture: $ARCH" && exit 1; \
     fi && \
-    wget -O caido-cli.tar.gz https://caido.download/releases/v0.48.0/caido-cli-v0.48.0-linux-${CAIDO_ARCH}.tar.gz && \
+    wget -O caido-cli.tar.gz "https://caido.download/releases/v${CAIDO_VERSION}/caido-cli-v${CAIDO_VERSION}-linux-${CAIDO_ARCH}.tar.gz" && \
     tar -xzf caido-cli.tar.gz && \
     chmod +x caido-cli && \
     rm caido-cli.tar.gz && \

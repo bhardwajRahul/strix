@@ -380,7 +380,7 @@ GraphQL client against Caido at `http://127.0.0.1:48080/graphql` (`proxy_manager
 
 Supports HTTPQL filter syntax for request queries. Pagination (`offset`, `limit`). `view_request` supports regex search through captured request/response pairs. Caido all-traffic capture is enabled because `/etc/profile.d/proxy.sh` sets `http_proxy`/`https_proxy` system-wide and the Caido CA cert is installed into the system + NSS trust stores.
 
-Hardcoded port `48080`. Caido v0.48.0 pinned in `containers/Dockerfile`.
+Hardcoded port `48080`. Caido v0.56.0 pinned in `containers/Dockerfile` (override via `--build-arg CAIDO_VERSION=...`).
 
 #### Notes (`strix/tools/notes/`) — `create_note`, `list_notes`, `get_note`, `update_note`, `delete_note` (+ internal `append_note_content`)
 In-memory dict + JSONL persistence at `{run_dir}/notes/notes.jsonl`. Wiki-category notes additionally rendered as Markdown to `{run_dir}/wiki/{note_id}-{title}.md` so they're human-readable artifacts of the run.
@@ -439,7 +439,7 @@ Three layers of defense before tool output reaches the model or telemetry:
 
 - Base: `kalilinux/kali-rolling:latest` (line 1).
 - Non-root `pentester` user with NOPASSWD sudo (lines 10-13) — needed for raw-socket pentest tools.
-- Pre-installed: `nmap`, `nuclei`, `subfinder`, `naabu`, `ffuf`, `sqlmap`, `zaproxy`, `wapiti`, `caido-cli` (v0.48.0); Go tools `httpx`, `katana`, `gospider`, `interactsh`; Python `arjun`, `dirsearch`, `wafw00f`, `semgrep`, `bandit`, `trufflehog`; JS `retire`, `eslint`, `js-beautify`, `jshint`, `@ast-grep/cli`, `tree-sitter-cli`; tree-sitter parsers for Java/JS/Python/Go/Bash/JSON/YAML/TS; `gitleaks`, `trivy`.
+- Pre-installed: `nmap`, `nuclei`, `subfinder`, `naabu`, `ffuf`, `sqlmap`, `zaproxy`, `wapiti`, `caido-cli` (v0.56.0); Go tools `httpx`, `katana`, `gospider`, `interactsh`; Python `arjun`, `dirsearch`, `wafw00f`, `semgrep`, `bandit`, `trufflehog`; JS `retire`, `eslint`, `js-beautify`, `jshint`, `@ast-grep/cli`, `tree-sitter-cli`; tree-sitter parsers for Java/JS/Python/Go/Bash/JSON/YAML/TS; `gitleaks`, `trivy`.
 - Sandbox-extra Python deps: `fastapi`, `uvicorn`, `ipython`, `playwright`, `pyte`, `libtmux`, `gql`, `openhands-aci`.
 - Self-signed CA chain at `/app/certs/{ca.key,ca.crt,ca.p12}`, 3650-day validity (lines 52-71).
 - Workspace `/workspace` owned by pentester (line 194).
