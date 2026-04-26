@@ -211,7 +211,7 @@ Snapshots (`state.model_dump()`) are stored verbatim in the agent-graph node whe
 
 **Identity injection**: parent task is wrapped in `<agent_delegation>...<agent_identity>` so the child knows its name/ID and is told to never echo it (`:238-266`).
 
-**Finish from subagent** (`agent_finish`, `:567-685`): only callable when `parent_id != None`. Builds `<agent_completion_report>` XML with summary/findings/recommendations and pushes it onto the parent's inbox. If the agent is whitebox, the wiki note is updated with a delta.
+**Finish from subagent** (`agent_finish`, `:567-685`): only callable when `parent_id != None`. Builds `<agent_completion_report>` XML with summary/findings/recommendations and pushes it onto the parent's inbox.
 
 **Finish from root** (`finish_scan`, `tools/finish/finish_actions.py:86-149`): only callable from root (`parent_id is None`); blocks if any sibling/child agent is still `running`/`stopping`. Triggers `tracer.update_scan_final_fields()` which writes `penetration_test_report.md`.
 
@@ -382,12 +382,10 @@ Supports HTTPQL filter syntax for request queries. Pagination (`offset`, `limit`
 
 Hardcoded port `48080`. Caido v0.56.0 pinned in `containers/Dockerfile` (override via `--build-arg CAIDO_VERSION=...`).
 
-#### Notes (`strix/tools/notes/`) — `create_note`, `list_notes`, `get_note`, `update_note`, `delete_note` (+ internal `append_note_content`)
-In-memory dict + JSONL persistence at `{run_dir}/notes/notes.jsonl`. Wiki-category notes additionally rendered as Markdown to `{run_dir}/wiki/{note_id}-{title}.md` so they're human-readable artifacts of the run.
+#### Notes (`strix/tools/notes/`) — `create_note`, `list_notes`, `get_note`, `update_note`, `delete_note`
+Pure in-memory dict, shared across every agent in the same scan for the lifetime of the process. **Not persisted** — process exit clears the lot.
 
 Categories: `general | findings | methodology | questions | plan | wiki`. IDs are 5-char UUID hex (collision-retry up to 20 attempts). Thread-safe via RLock. List preview defaults to 280 chars per note.
-
-The wiki note in particular is **the shared whitebox knowledge base** between root and subagents; `agent_finish` for whitebox subagents auto-appends a delta (see §5.3).
 
 #### Todos (`strix/tools/todo/`) — 6 tools
 Per-agent in-memory storage; **not persisted**. Priorities `critical | high | normal | low`; statuses `pending | in_progress | done`. Bulk create/update via JSON list. IDs are 6-char UUID hex.
@@ -536,8 +534,6 @@ Created and managed by `telemetry/tracer.py`. Contents:
 - `events.jsonl` — every span/event in append-only JSONL (thread-safe writes).
 - `vulnerabilities/vuln_{id}.json` — one file per finding, sorted by severity, dedup-checked.
 - `penetration_test_report.md` — final markdown report (executive summary + methodology + technical analysis + recommendations).
-- `notes/notes.jsonl` — note ops audit log.
-- `wiki/{note_id}-{slug}.md` — human-readable wiki notes.
 - `<target_subdir>/` — local source clones, per-target.
 
 There is **no execution checkpointing** — if the process crashes mid-run, the agent restarts from scratch on retry. Resumability is limited to the interactive-mode wait/resume on inbound messages.
@@ -576,7 +572,7 @@ There **is no separate persona file**. All agents are `StrixAgent` instances usi
 - `parent_id` (root agent vs subagent → different finish tools, different prompts injected).
 - Loaded skills (root gets `root_agent`; whitebox gets `coordination/source_aware_whitebox` + `custom/source_aware_sast`).
 - `system_prompt_context.authorized_targets` (only set on root).
-- `is_whitebox` flag (toggles wiki-note auto-update on subagent finish).
+- `is_whitebox` flag (selects the whitebox skill stack).
 
 ---
 
@@ -754,7 +750,7 @@ Disabled by `STRIX_POSTHOG_TELEMETRY=0` or `STRIX_TELEMETRY=0`.
 | `strix/tools/terminal/` | tmux/libtmux tool. |
 | `strix/tools/python/` | IPython tool. |
 | `strix/tools/proxy/` | Caido GraphQL client. |
-| `strix/tools/notes/` | Notes + wiki. |
+| `strix/tools/notes/` | In-memory notes (shared across agents in a run). |
 | `strix/tools/todo/` | In-memory todos. |
 | `strix/tools/reporting/` | Vulnerability reports + CVSS. |
 | `strix/tools/web_search/` | Perplexity. |

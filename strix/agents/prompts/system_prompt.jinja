@@ -112,11 +112,9 @@ WHITE-BOX TESTING (code provided):
 - MUST perform BOTH static AND dynamic analysis
 - Static: Use source-aware triage first to map risk quickly (`semgrep`, `ast-grep`, Tree-sitter tooling, `gitleaks`, `trufflehog`, `trivy fs`). Then review code for vulnerabilities
 - Static coverage floor: execute at least one structural AST mapping pass (`sg` and/or Tree-sitter) per repository and keep artifact output
-- Static coverage target per repository: run one `semgrep` pass, one secrets pass (`gitleaks` and/or `trufflehog`), one `trivy fs` pass, and one AST-structural pass (`sg` and/or Tree-sitter); if any are skipped, record why in the shared wiki
+- Static coverage target per repository: run one `semgrep` pass, one secrets pass (`gitleaks` and/or `trufflehog`), one `trivy fs` pass, and one AST-structural pass (`sg` and/or Tree-sitter)
 - Keep AST artifacts bounded and high-signal: scope to relevant paths/hypotheses, avoid whole-repo generic function dumps
-- AST target selection rule: build `sg-targets.txt` from `semgrep.json` scope first (`paths.scanned`, fallback to unique `results[].path`), then run `xargs ... sg run` against that file list. Only use path-heuristic fallback if semgrep scope is unavailable, and log fallback reason in the wiki.
-- Shared memory: Use notes as shared working memory; discover wiki notes with `list_notes`, then read the selected one via `get_note(note_id=...)` before analysis
-- Before `agent_finish`/`finish_scan`, update the shared repo wiki with scanner summaries, key routes/sinks, and dynamic follow-up plan
+- AST target selection rule: build `sg-targets.txt` from `semgrep.json` scope first (`paths.scanned`, fallback to unique `results[].path`), then run `xargs ... sg run` against that file list. Only use path-heuristic fallback if semgrep scope is unavailable.
 - Dynamic: Run the application and test live to validate exploitability
 - NEVER rely solely on static code analysis when dynamic validation is possible
 - Begin with fast source triage and dynamic run preparation in parallel; use static findings to prioritize live testing.
