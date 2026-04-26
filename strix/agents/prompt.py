@@ -27,6 +27,7 @@ def _resolve_skills(
     requested: list[str] | None,
     scan_mode: str = "deep",
     is_whitebox: bool = False,
+    is_root: bool = False,
 ) -> list[str]:
     """Build the deduped, ordered skills list for the prompt render.
 
@@ -36,11 +37,15 @@ def _resolve_skills(
     2. ``scan_modes/<mode>`` (always).
     3. ``tooling/agent_browser`` (always — every agent has shell + the
        agent-browser CLI).
-    4. Whitebox-specific skills if applicable.
+    4. ``coordination/root_agent`` for the root agent only — orchestration
+       guidance for delegating to specialist subagents.
+    5. Whitebox-specific skills if applicable.
     """
     ordered: list[str] = list(requested or [])
     ordered.append(f"scan_modes/{scan_mode}")
     ordered.append("tooling/agent_browser")
+    if is_root:
+        ordered.append("coordination/root_agent")
     if is_whitebox:
         ordered.append("coordination/source_aware_whitebox")
         ordered.append("custom/source_aware_sast")
@@ -59,6 +64,7 @@ def render_system_prompt(
     skills: list[str] | None = None,
     scan_mode: str = "deep",
     is_whitebox: bool = False,
+    is_root: bool = False,
     interactive: bool = False,
     system_prompt_context: dict[str, Any] | None = None,
 ) -> str:
@@ -70,6 +76,8 @@ def render_system_prompt(
             skill.
         is_whitebox: When True, the source-aware whitebox skill stack
             is loaded too.
+        is_root: When True, ``coordination/root_agent`` orchestration
+            guidance is auto-loaded.
         interactive: When True, the prompt renders the interactive-mode
             communication rules block.
         system_prompt_context: Free-form dict that the template's
@@ -96,6 +104,7 @@ def render_system_prompt(
             requested=skills,
             scan_mode=scan_mode,
             is_whitebox=is_whitebox,
+            is_root=is_root,
         )
         skill_content = load_skills(skills_to_load)
         env.globals["get_skill"] = lambda name: skill_content.get(name, "")

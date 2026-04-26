@@ -56,6 +56,13 @@ class StrixOrchestrationHooks(RunHooks[Any]):
             # warnings fire exactly once per agent lifetime — surviving
             # ``run_with_continuation`` cycles, mirroring legacy
             # ``state.max_iterations_warning_sent``.
+            #
+            # The flags are mutated lock-free below. Safe because the SDK
+            # serializes ``on_llm_start`` per agent (one in-flight LLM call
+            # per ``Runner.run`` instance), so this hook is the sole writer
+            # to ``warned_85`` / ``warned_final`` for this agent_id.
+            # ``record_usage`` (which acquires the lock) only writes
+            # ``in`` / ``out`` / ``cached`` / ``calls`` — disjoint keys.
             if cur >= int(max_turns * 0.85) and not stats.get("warned_85"):
                 stats["warned_85"] = True
                 input_items.append(

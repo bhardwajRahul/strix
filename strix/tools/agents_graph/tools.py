@@ -19,6 +19,7 @@ import asyncio
 import json
 import logging
 import uuid
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal
 
 from agents import RunContextWrapper, function_tool
@@ -52,26 +53,34 @@ def _render_completion_report(
     findings: list[str],
     recommendations: list[str],
 ) -> str:
-    """Render an ``<agent_completion_report>`` XML payload (legacy parity)."""
-    from datetime import UTC, datetime
-    from html import escape
+    """Render a child's completion report as plain structured text.
 
+    Goes into the parent's bus inbox; the inject filter prepends a
+    ``[Message from ...]`` header on top, so this body just carries the
+    contents. No XML — no escaping concerns, no parser ambiguity.
+    """
     status = "SUCCESS" if success else "FAILED"
     completion_time = datetime.now(UTC).isoformat()
-    findings_xml = "".join(f"<finding>{escape(f)}</finding>" for f in findings)
-    recs_xml = "".join(f"<recommendation>{escape(r)}</recommendation>" for r in recommendations)
-    return (
-        "<agent_completion_report>\n"
-        f"  <agent_info><agent_name>{escape(agent_name)}</agent_name>"
-        f"<agent_id>{escape(agent_id)}</agent_id>"
-        f"<task>{escape(task)}</task>"
-        f"<status>{status}</status>"
-        f"<completion_time>{completion_time}</completion_time></agent_info>\n"
-        f"  <results><summary>{escape(result_summary)}</summary>"
-        f"<findings>{findings_xml}</findings>"
-        f"<recommendations>{recs_xml}</recommendations></results>\n"
-        "</agent_completion_report>"
-    )
+
+    lines: list[str] = [
+        f"== Completion report from {agent_name} ({agent_id}) ==",
+        f"Status: {status}",
+        f"Time: {completion_time}",
+    ]
+    if task:
+        lines.append(f"Task: {task}")
+    lines.append("")
+    lines.append("Summary:")
+    lines.append(result_summary or "(none)")
+    if findings:
+        lines.append("")
+        lines.append("Findings:")
+        lines.extend(f"- {f}" for f in findings)
+    if recommendations:
+        lines.append("")
+        lines.append("Recommendations:")
+        lines.extend(f"- {r}" for r in recommendations)
+    return "\n".join(lines)
 
 
 @function_tool(timeout=30)
@@ -456,9 +465,9 @@ async def create_agent(
             {
                 "role": "user",
                 "content": (
-                    "<inherited_context_from_parent>\n"
+                    "== Inherited context from parent (background only) ==\n"
                     f"{rendered}\n"
-                    "</inherited_context_from_parent>\n"
+                    "== End of inherited context ==\n"
                     "Use the above as background only; do not continue the "
                     "parent's work. Your task follows."
                 ),

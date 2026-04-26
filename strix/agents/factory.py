@@ -151,6 +151,7 @@ def build_strix_agent(
         skills=skills,
         scan_mode=scan_mode,
         is_whitebox=is_whitebox,
+        is_root=is_root,
         interactive=interactive,
         system_prompt_context=system_prompt_context,
     )

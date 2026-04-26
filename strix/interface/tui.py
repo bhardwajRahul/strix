@@ -1843,11 +1843,16 @@ class StrixTUIApp(App):  # type: ignore[misc]
         return agent_name, False
 
     def action_confirm_stop_agent(self, agent_id: str) -> None:
+        # Graceful stop: each agent's current turn finishes (and is saved to
+        # session) before the run loop honors the cancel. The interactive
+        # outer loop sees ``stopping`` and exits with status="stopped".
+        # The hard ``cancel_descendants`` path remains for KeyboardInterrupt
+        # in entry.py where graceful isn't possible.
         if self._scan_loop is None or self._scan_loop.is_closed():
             logging.warning("No active scan loop; cannot stop agent %s", agent_id)
             return
         asyncio.run_coroutine_threadsafe(
-            self.bus.cancel_descendants(agent_id),
+            self.bus.cancel_descendants_graceful(agent_id),
             self._scan_loop,
         )
 
