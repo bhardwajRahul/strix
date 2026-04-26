@@ -47,6 +47,24 @@ def get_cvss_color(cvss_score: float) -> str:
     return "#6b7280"
 
 
+def format_token_count(count: float | None) -> str:
+    value = int(count or 0)
+    if value >= 1_000_000:
+        return f"{value / 1_000_000:.1f}M"
+    if value >= 1_000:
+        return f"{value / 1_000:.1f}K"
+    return str(value)
+
+
+def format_cost(cost: float | None) -> str:
+    value = float(cost or 0.0)
+    if value < 0.0001:
+        return f"${value:.6f}"
+    if value < 1:
+        return f"${value:.4f}"
+    return f"${value:.2f}"
+
+
 def format_vulnerability_report(report: dict[str, Any]) -> Text:  # noqa: PLR0915
     """Format a vulnerability report for CLI display with all rich fields."""
     field_style = "bold #4ade80"
@@ -235,6 +253,71 @@ def _build_vulnerability_stats(stats_text: Text, report_state: Any) -> None:
         stats_text.append("\n")
 
 
+def _llm_usage(report_state: Any) -> dict[str, Any]:
+    if hasattr(report_state, "get_total_llm_usage"):
+        usage = report_state.get_total_llm_usage()
+        return usage if isinstance(usage, dict) else {}
+    usage = getattr(report_state, "run_record", {}).get("llm_usage")
+    return usage if isinstance(usage, dict) else {}
+
+
+def _int_stat(usage: dict[str, Any], key: str) -> int:
+    try:
+        return max(0, int(usage.get(key) or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _float_stat(usage: dict[str, Any], key: str) -> float:
+    try:
+        value = float(usage.get(key) or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+    return value if value > 0 else 0.0
+
+
+def _detail_value(usage: dict[str, Any], detail_key: str, value_key: str) -> int:
+    details = usage.get(detail_key)
+    if isinstance(details, list):
+        details = details[0] if details and isinstance(details[0], dict) else {}
+    if not isinstance(details, dict):
+        return 0
+    return _int_stat(details, value_key)
+
+
+def _build_llm_usage_stats(
+    stats_text: Text,
+    report_state: Any,
+    *,
+    include_requests: bool = False,
+) -> None:
+    usage = _llm_usage(report_state)
+    if not usage or _int_stat(usage, "total_tokens") <= 0:
+        return
+
+    input_tokens = _int_stat(usage, "input_tokens")
+    output_tokens = _int_stat(usage, "output_tokens")
+    cached_tokens = _detail_value(usage, "input_tokens_details", "cached_tokens")
+    reasoning_tokens = _detail_value(usage, "output_tokens_details", "reasoning_tokens")
+    cost = _float_stat(usage, "cost")
+
+    stats_text.append("LLM Usage  ", style="bold cyan")
+    if include_requests:
+        stats_text.append(f"{_int_stat(usage, 'requests')} req", style="white")
+        stats_text.append(" | ", style="dim white")
+    stats_text.append(f"In: {format_token_count(input_tokens)}", style="white")
+    if cached_tokens > 0:
+        stats_text.append(f" ({format_token_count(cached_tokens)} cached)", style="dim white")
+    stats_text.append(" | ", style="dim white")
+    stats_text.append(f"Out: {format_token_count(output_tokens)}", style="white")
+    if reasoning_tokens > 0:
+        stats_text.append(f" ({format_token_count(reasoning_tokens)} reasoning)", style="dim white")
+    if cost > 0:
+        stats_text.append(" | ", style="dim white")
+        stats_text.append(f"Cost: {format_cost(cost)}", style="white")
+    stats_text.append("\n")
+
+
 def build_final_stats_text(report_state: Any) -> Text:
     """Build final stats from Strix-owned scan artifacts."""
     stats_text = Text()
@@ -242,6 +325,7 @@ def build_final_stats_text(report_state: Any) -> Text:
         return stats_text
 
     _build_vulnerability_stats(stats_text, report_state)
+    _build_llm_usage_stats(stats_text, report_state, include_requests=True)
 
     return stats_text
 
@@ -284,6 +368,8 @@ def build_live_stats_text(report_state: Any) -> Text:
 
         stats_text.append("\n")
 
+    _build_llm_usage_stats(stats_text, report_state)
+
     return stats_text
 
 
@@ -294,6 +380,16 @@ def build_tui_stats_text(report_state: Any) -> Text:
 
     model = load_settings().llm.model or "unknown"
     stats_text.append(str(model), style="white")
+
+    usage = _llm_usage(report_state)
+    if usage and _int_stat(usage, "total_tokens") > 0:
+        stats_text.append("\n")
+        stats_text.append("Tokens: ", style="bold white")
+        stats_text.append(format_token_count(_int_stat(usage, "total_tokens")), style="white")
+        cost = _float_stat(usage, "cost")
+        if cost > 0:
+            stats_text.append("  Cost: ", style="bold white")
+            stats_text.append(format_cost(cost), style="white")
 
     caido_url = getattr(report_state, "caido_url", None)
     if caido_url:

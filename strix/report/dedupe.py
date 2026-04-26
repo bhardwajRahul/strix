@@ -17,6 +17,7 @@ from strix.config.models import (
     configure_sdk_model_defaults,
     normalize_model_name,
 )
+from strix.report.state import get_global_report_state
 
 
 if TYPE_CHECKING:
@@ -187,11 +188,12 @@ async def check_duplicate(
         )
 
         configure_sdk_model_defaults(settings)
-        model = MultiProvider().get_model(normalize_model_name(model_name))
+        resolved_model = normalize_model_name(model_name)
+        model = MultiProvider().get_model(resolved_model)
         response = await model.get_response(
             system_instructions=DEDUPE_SYSTEM_PROMPT,
             input=user_msg,
-            model_settings=ModelSettings(retry=DEFAULT_MODEL_RETRY),
+            model_settings=ModelSettings(retry=DEFAULT_MODEL_RETRY, include_usage=True),
             tools=[],
             output_schema=None,
             handoffs=[],
@@ -200,6 +202,14 @@ async def check_duplicate(
             conversation_id=None,
             prompt=None,
         )
+        report_state = get_global_report_state()
+        if report_state is not None:
+            report_state.record_sdk_usage(
+                agent_id="dedupe",
+                agent_name="dedupe",
+                model=resolved_model,
+                usage=response.usage,
+            )
         content = _extract_text(response)
         if not content:
             return {

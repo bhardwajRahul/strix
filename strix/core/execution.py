@@ -30,6 +30,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 StreamEventSink = Callable[[str, Any], None]
+UsageSink = Callable[[str, str | None, Any], None]
 
 
 async def run_agent_loop(
@@ -45,6 +46,7 @@ async def run_agent_loop(
     session: Session | None = None,
     start_parked: bool = False,
     event_sink: StreamEventSink | None = None,
+    usage_sink: UsageSink | None = None,
 ) -> RunResultBase | None:
     await coordinator.attach_runtime(
         agent_id,
@@ -66,6 +68,7 @@ async def run_agent_loop(
                 session=session,
                 interactive=interactive,
                 event_sink=event_sink,
+                usage_sink=usage_sink,
             )
         else:
             result = await _run_noninteractive_until_lifecycle(
@@ -78,6 +81,7 @@ async def run_agent_loop(
                 max_turns=max_turns,
                 session=session,
                 event_sink=event_sink,
+                usage_sink=usage_sink,
             )
 
     if not interactive:
@@ -101,6 +105,7 @@ async def run_agent_loop(
             session=session,
             interactive=interactive,
             event_sink=event_sink,
+            usage_sink=usage_sink,
         )
 
 
@@ -119,6 +124,7 @@ async def spawn_child_agent(
     skills: list[str],
     parent_history: list[Any],
     event_sink: StreamEventSink | None = None,
+    usage_sink: UsageSink | None = None,
 ) -> dict[str, Any]:
     parent_id = parent_ctx.get("agent_id")
     if not isinstance(parent_id, str):
@@ -155,6 +161,7 @@ async def spawn_child_agent(
             parent_history=parent_history,
         ),
         event_sink=event_sink,
+        usage_sink=usage_sink,
     )
 
     return {
@@ -178,6 +185,7 @@ async def respawn_subagents(
     parent_ctx: dict[str, Any],
     root_id: str,
     event_sink: StreamEventSink | None = None,
+    usage_sink: UsageSink | None = None,
 ) -> None:
     """Re-spawn subagent runners from a restored coordinator snapshot."""
     async with coordinator._lock:
@@ -234,6 +242,7 @@ async def respawn_subagents(
                 initial_input=[],
                 start_parked=start_parked,
                 event_sink=event_sink,
+                usage_sink=usage_sink,
             )
             logger.info(
                 "respawned %s (%s) parent=%s task_len=%d",
@@ -259,6 +268,7 @@ async def _run_noninteractive_until_lifecycle(
     max_turns: int,
     session: Session | None,
     event_sink: StreamEventSink | None,
+    usage_sink: UsageSink | None,
 ) -> RunResultBase | None:
     """Non-chat mode keeps running until finish_scan / agent_finish settles status."""
     result: RunResultBase | None = None
@@ -278,6 +288,7 @@ async def _run_noninteractive_until_lifecycle(
             session=session,
             interactive=False,
             event_sink=event_sink,
+            usage_sink=usage_sink,
         )
 
         status = await _agent_status(coordinator, agent_id)
@@ -322,6 +333,7 @@ async def _run_cycle(
     session: Session | None,
     interactive: bool,
     event_sink: StreamEventSink | None,
+    usage_sink: UsageSink | None,
 ) -> RunResultBase | None:
     try:
         await coordinator.mark_running(agent_id)
@@ -344,6 +356,8 @@ async def _run_cycle(
             if stream.run_loop_exception is not None:
                 raise stream.run_loop_exception
         finally:
+            if usage_sink is not None:
+                _emit_stream_usage(agent, agent_id, stream, usage_sink)
             await coordinator.detach_stream(agent_id, stream)
     except Exception as exc:
         if not interactive:
@@ -463,6 +477,7 @@ async def _start_child_runner(
     initial_input: Any,
     start_parked: bool = False,
     event_sink: StreamEventSink | None = None,
+    usage_sink: UsageSink | None = None,
 ) -> None:
     session = open_agent_session(child_id, agents_db_path)
     sessions_to_close.append(session)
@@ -486,7 +501,25 @@ async def _start_child_runner(
             session=session,
             start_parked=start_parked,
             event_sink=event_sink,
+            usage_sink=usage_sink,
         ),
         name=f"agent-{name}-{child_id}",
     )
     await coordinator.attach_runtime(child_id, task=task_handle)
+
+
+def _emit_stream_usage(
+    agent: Any,
+    agent_id: str,
+    stream: RunResultBase,
+    usage_sink: UsageSink,
+) -> None:
+    context_wrapper = getattr(stream, "context_wrapper", None)
+    usage = getattr(context_wrapper, "usage", None)
+    if usage is None:
+        return
+    agent_name = getattr(agent, "name", None)
+    try:
+        usage_sink(agent_id, agent_name if isinstance(agent_name, str) else None, usage)
+    except Exception:
+        logger.exception("usage sink failed for %s", agent_id)

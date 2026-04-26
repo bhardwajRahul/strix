@@ -12,7 +12,7 @@ from strix.config.models import DEFAULT_MODEL_RETRY
 
 
 # Default max_turns budget passed to the SDK runner.
-DEFAULT_MAX_TURNS = 300
+DEFAULT_MAX_TURNS = 500
 
 
 def build_root_task(scan_config: dict[str, Any]) -> str:
@@ -112,6 +112,7 @@ def make_model_settings(
         parallel_tool_calls=False,
         tool_choice="required",
         retry=DEFAULT_MODEL_RETRY,
+        include_usage=True,
     )
     if reasoning_effort is not None:
         model_settings = model_settings.resolve(

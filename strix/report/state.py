@@ -6,7 +6,10 @@ from pathlib import Path
 from typing import Any, Optional
 from uuid import uuid4
 
+from agents.usage import Usage
+
 from strix.core.paths import run_dir_for
+from strix.report.usage import LLMUsageLedger
 from strix.report.writer import (
     read_run_record,
     write_executive_report,
@@ -51,6 +54,7 @@ class ReportState:
 
         self.scan_results: dict[str, Any] | None = None
         self.scan_config: dict[str, Any] | None = None
+        self._llm_usage = LLMUsageLedger()
         self.run_record: dict[str, Any] = {
             "run_id": self.run_id,
             "run_name": self.run_name,
@@ -58,6 +62,7 @@ class ReportState:
             "end_time": None,
             "status": "running",
             "targets_info": [],
+            "llm_usage": self._build_llm_usage_record(),
         }
         self._run_dir: Path | None = None
         self._saved_vuln_ids: set[str] = set()
@@ -104,6 +109,7 @@ class ReportState:
             if isinstance(scan_results, dict):
                 self.scan_results = scan_results
                 self.final_scan_result = self._format_final_scan_result(scan_results)
+            self._hydrate_llm_usage(data.get("llm_usage"))
             logger.info("report state hydrated run.json from %s", run_dir)
 
         json_path = run_dir / "vulnerabilities.json"
@@ -206,6 +212,26 @@ class ReportState:
     def get_existing_vulnerabilities(self) -> list[dict[str, Any]]:
         return list(self.vulnerability_reports)
 
+    def record_sdk_usage(
+        self,
+        *,
+        agent_id: str,
+        usage: Usage | None,
+        agent_name: str | None = None,
+        model: str | None = None,
+    ) -> None:
+        """Record SDK-native token usage for one completed model run/cycle."""
+        if self._llm_usage.record(
+            agent_id=agent_id,
+            agent_name=agent_name,
+            model=model,
+            usage=usage,
+        ):
+            self.save_run_data()
+
+    def get_total_llm_usage(self) -> dict[str, Any]:
+        return dict(self.run_record.get("llm_usage") or self._build_llm_usage_record())
+
     def update_scan_final_fields(
         self,
         executive_summary: str,
@@ -264,6 +290,7 @@ class ReportState:
             self.run_record["end_time"] = self.end_time
             self.run_record["status"] = status
 
+        self._sync_llm_usage_record()
         self._save_artifacts()
 
     def cleanup(self, status: str = "stopped") -> None:
@@ -304,3 +331,13 @@ class ReportState:
             logger.info("Essential scan data saved to: %s", run_dir)
         except (OSError, RuntimeError):
             logger.exception("Failed to save scan data")
+
+    def _sync_llm_usage_record(self) -> None:
+        self.run_record["llm_usage"] = self._build_llm_usage_record()
+
+    def _build_llm_usage_record(self) -> dict[str, Any]:
+        return self._llm_usage.to_record()
+
+    def _hydrate_llm_usage(self, raw_usage: Any) -> None:
+        self._llm_usage.hydrate(raw_usage)
+        self._sync_llm_usage_record()

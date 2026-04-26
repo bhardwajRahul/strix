@@ -131,6 +131,20 @@ def end(report_state: "ReportState", exit_reason: str = "completed") -> None:
     except (ValueError, TypeError, AttributeError):
         pass
 
+    llm_props: dict[str, int | float] = {}
+    try:
+        usage = report_state.get_total_llm_usage()
+        if isinstance(usage, dict):
+            llm_props = {
+                "llm_requests": int(usage.get("requests") or 0),
+                "llm_input_tokens": int(usage.get("input_tokens") or 0),
+                "llm_output_tokens": int(usage.get("output_tokens") or 0),
+                "llm_tokens": int(usage.get("total_tokens") or 0),
+                "llm_cost": float(usage.get("cost") or 0.0),
+            }
+    except (TypeError, ValueError, AttributeError):
+        pass
+
     _send(
         "scan_ended",
         {
@@ -139,6 +153,7 @@ def end(report_state: "ReportState", exit_reason: str = "completed") -> None:
             "duration_seconds": round(duration),
             "vulnerabilities_total": len(report_state.vulnerability_reports),
             **{f"vulnerabilities_{k}": v for k, v in vulnerabilities_counts.items()},
+            **llm_props,
         },
     )
 

@@ -36,6 +36,7 @@ from strix.core.inputs import (
 )
 from strix.core.paths import run_dir_for, runtime_state_dir
 from strix.core.sessions import open_agent_session
+from strix.report.state import get_global_report_state
 from strix.runtime import session_manager
 from strix.telemetry.logging import set_scan_id, setup_scan_logging
 
@@ -167,6 +168,17 @@ async def run_strix_scan(
             trace_include_sensitive_data=False,
         )
 
+        def usage_sink(agent_id: str, agent_name: str | None, usage: Any) -> None:
+            report_state = get_global_report_state()
+            if report_state is None:
+                return
+            report_state.record_sdk_usage(
+                agent_id=agent_id,
+                agent_name=agent_name,
+                model=resolved_model,
+                usage=usage,
+            )
+
         scope_context = build_scope_context(scan_config)
 
         root_agent = build_strix_agent(
@@ -205,6 +217,7 @@ async def run_strix_scan(
                 max_turns=max_turns,
                 interactive=interactive,
                 event_sink=event_sink,
+                usage_sink=usage_sink,
                 **kwargs,
             )
 
@@ -236,6 +249,7 @@ async def run_strix_scan(
                 parent_ctx=context,
                 root_id=root_id,
                 event_sink=event_sink,
+                usage_sink=usage_sink,
             )
 
         initial_input: Any = [] if is_resume else root_task
@@ -276,6 +290,7 @@ async def run_strix_scan(
             session=root_session,
             start_parked=bool(interactive and is_resume and root_status != "running"),
             event_sink=event_sink,
+            usage_sink=usage_sink,
         )
     except BaseException:
         logger.exception("Strix scan %s failed", scan_id)
