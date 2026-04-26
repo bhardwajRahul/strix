@@ -14,7 +14,7 @@ import logging
 import uuid
 from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from agents import RunConfig, Runner
 from agents.exceptions import AgentsException, MaxTurnsExceeded, UserError
@@ -38,6 +38,7 @@ from strix.telemetry.logging import set_scan_id, setup_scan_logging
 
 
 if TYPE_CHECKING:
+    from agents.items import TResponseInputItem
     from agents.memory import Session
     from agents.result import RunResultBase
 
@@ -74,18 +75,31 @@ async def _run_agent_loop(
     result: RunResultBase | None = None
 
     if not (start_parked and interactive):
-        result = await _run_cycle(
-            agent,
-            coordinator,
-            agent_id,
-            input_data=initial_input,
-            run_config=run_config,
-            context=context,
-            max_turns=max_turns,
-            session=session,
-            interactive=interactive,
-            event_sink=event_sink,
-        )
+        if interactive:
+            result = await _run_cycle(
+                agent,
+                coordinator,
+                agent_id,
+                input_data=initial_input,
+                run_config=run_config,
+                context=context,
+                max_turns=max_turns,
+                session=session,
+                interactive=interactive,
+                event_sink=event_sink,
+            )
+        else:
+            result = await _run_noninteractive_until_lifecycle(
+                agent,
+                coordinator,
+                agent_id,
+                initial_input=initial_input,
+                run_config=run_config,
+                context=context,
+                max_turns=max_turns,
+                session=session,
+                event_sink=event_sink,
+            )
 
     if not interactive:
         return result
@@ -108,6 +122,68 @@ async def _run_agent_loop(
             session=session,
             interactive=interactive,
             event_sink=event_sink,
+        )
+
+
+async def _run_noninteractive_until_lifecycle(
+    agent: Any,
+    coordinator: AgentCoordinator,
+    agent_id: str,
+    *,
+    initial_input: Any,
+    run_config: RunConfig,
+    context: dict[str, Any],
+    max_turns: int,
+    session: Session | None,
+    event_sink: StreamEventSink | None,
+) -> RunResultBase | None:
+    """Non-chat mode keeps running until finish_scan / agent_finish settles status."""
+    result: RunResultBase | None = None
+    input_data: Any = initial_input
+    invalid_final_outputs = 0
+    invalid_final_output_limit = max(1, max_turns)
+
+    while True:
+        result = await _run_cycle(
+            agent,
+            coordinator,
+            agent_id,
+            input_data=input_data,
+            run_config=run_config,
+            context=context,
+            max_turns=max_turns,
+            session=session,
+            interactive=False,
+            event_sink=event_sink,
+        )
+
+        status = await _agent_status(coordinator, agent_id)
+        if status != "running":
+            return result
+
+        invalid_final_outputs += 1
+        logger.warning(
+            "agent %s produced non-lifecycle final output in non-interactive mode; "
+            "forcing tool continuation (%d/%d): %s",
+            agent_id,
+            invalid_final_outputs,
+            invalid_final_output_limit,
+            _final_output_preview(result),
+        )
+
+        if invalid_final_outputs >= invalid_final_output_limit:
+            await coordinator.set_status(agent_id, "crashed")
+            await _notify_parent_on_crash(coordinator, agent_id, "crashed")
+            raise MaxTurnsExceeded(
+                "Agent exhausted non-interactive recovery attempts without calling "
+                "finish_scan or agent_finish."
+            )
+
+        input_data = await _append_noninteractive_tool_required_message(
+            session=session,
+            context=context,
+            attempt=invalid_final_outputs,
+            limit=invalid_final_output_limit,
         )
 
 
@@ -175,9 +251,50 @@ async def _settle_run_result(
     if current_status != "running":
         return
 
-    status: Status = "waiting" if interactive else "crashed"
-    await coordinator.set_status(agent_id, status)
-    await _notify_parent_on_crash(coordinator, agent_id, status)
+    if not interactive:
+        return
+
+    await coordinator.set_status(agent_id, "waiting")
+
+
+async def _agent_status(coordinator: AgentCoordinator, agent_id: str) -> Status | None:
+    async with coordinator._lock:
+        return coordinator.statuses.get(agent_id)
+
+
+def _final_output_preview(result: RunResultBase | None) -> str:
+    final_output = getattr(result, "final_output", None)
+    if final_output is None:
+        return "<none>"
+    text = str(final_output).replace("\n", " ").strip()
+    if not text:
+        return "<empty>"
+    return text[:300]
+
+
+async def _append_noninteractive_tool_required_message(
+    *,
+    session: Session | None,
+    context: dict[str, Any],
+    attempt: int,
+    limit: int,
+) -> list[dict[str, str]]:
+    finish_tool = "finish_scan" if context.get("parent_id") is None else "agent_finish"
+    message = (
+        "Your previous response ended the autonomous Strix run without a lifecycle tool call. "
+        "That is invalid in non-interactive mode; plain text final answers are ignored. "
+        "Continue immediately and call exactly one tool. "
+        f"If your work is complete, call {finish_tool}. "
+        "If you are blocked waiting for another agent, call wait_for_message. "
+        "Otherwise use the appropriate execution or planning tool. "
+        f"This is recovery attempt {attempt}/{limit}."
+    )
+    item = {"role": "user", "content": message}
+    if session is None:
+        return [item]
+
+    await session.add_items([cast("TResponseInputItem", item)])
+    return []
 
 
 async def _notify_parent_on_crash(
