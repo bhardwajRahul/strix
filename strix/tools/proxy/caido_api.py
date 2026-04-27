@@ -1,28 +1,16 @@
-"""Pure caido-sdk-client call sequences shared by ``tools.py`` and ``python_action``.
-
-Functions here:
-
-- Take an explicit ``Client`` argument — no module-level state, no
-  context lookups. The caller decides what client to use.
-- Return raw caido-sdk-client objects (or dicts of primitives where the
-  composition itself is the value-add, like :func:`replay_send_raw`).
-- Live without ``@function_tool`` decorators, ``RunContextWrapper``, or
-  any host-side framework dependency. They run identically inside the
-  Strix host process (called from ``tools.py``) and inside the sandbox
-  container (called from the ``python_action`` driver), against the
-  same Caido instance — host gets there via the host-mapped port,
-  container gets there via ``localhost:48080``.
-
-Single source of truth for the Caido SDK call shapes; ``tools.py`` adds
-LLM-specific JSON serialization and error wrapping on top.
-"""
+"""Shared Caido proxy helpers and sandbox-importable ``caido_api`` module."""
 
 from __future__ import annotations
 
+import asyncio
+import json
+import os
 import time
+import urllib.request
 from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
+from caido_sdk_client import Client, TokenAuthOptions
 from caido_sdk_client.types import (
     ConnectionInfoInput,
     CreateReplaySessionFromRaw,
@@ -35,7 +23,7 @@ from caido_sdk_client.types import (
 
 
 if TYPE_CHECKING:
-    from caido_sdk_client import Client
+    from caido_sdk_client import Client as CaidoClient
 
 
 RequestPart = Literal["request", "response"]
@@ -50,8 +38,10 @@ SortBy = Literal[
     "source",
 ]
 SortOrder = Literal["asc", "desc"]
+ScopeAction = Literal["get", "list", "create", "update", "delete"]
 
-
+_DEFAULT_CAIDO_URL = "http://127.0.0.1:48080"
+_CLIENT_CACHE: dict[str, Client] = {}
 _REQ_FIELD_MAP: dict[SortBy, tuple[str, str]] = {
     "timestamp": ("req", "created_at"),
     "host": ("req", "host"),
@@ -64,11 +54,56 @@ _REQ_FIELD_MAP: dict[SortBy, tuple[str, str]] = {
 }
 
 
-# ----------------------------------------------------------------------
-# Requests — list / get
-# ----------------------------------------------------------------------
-async def list_requests(
-    client: Client,
+def caido_url() -> str:
+    """Return the in-sandbox Caido endpoint used by ``caido_api``."""
+    return os.environ.get("STRIX_CAIDO_URL", _DEFAULT_CAIDO_URL).rstrip("/")
+
+
+def _graphql_url() -> str:
+    base_url = caido_url()
+    parsed = urlparse(base_url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError(f"Invalid Caido URL: {base_url}")
+    return f"{base_url}/graphql"
+
+
+def _login_as_guest() -> str:
+    body = json.dumps({"query": "mutation { loginAsGuest { token { accessToken } } }"}).encode(
+        "utf-8"
+    )
+    req = urllib.request.Request(  # noqa: S310
+        _graphql_url(),
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=10) as resp:  # noqa: S310  # nosec B310
+        payload = json.loads(resp.read())
+    return str(payload["data"]["loginAsGuest"]["token"]["accessToken"])
+
+
+async def get_client() -> Client:
+    """Return a connected Caido SDK client for the local sandbox sidecar."""
+    if client := _CLIENT_CACHE.get("default"):
+        return client
+
+    token = await asyncio.to_thread(_login_as_guest)
+    client = Client(caido_url(), auth=TokenAuthOptions(token=token))
+    await client.connect()
+    _CLIENT_CACHE["default"] = client
+    return client
+
+
+async def close_client() -> None:
+    """Close the cached sandbox Caido client, if one was opened."""
+    client = _CLIENT_CACHE.pop("default", None)
+    if client is None:
+        return
+    await client.aclose()
+
+
+async def list_requests_with_client(
+    client: CaidoClient,
     *,
     httpql_filter: str | None = None,
     first: int = 50,
@@ -89,8 +124,8 @@ async def list_requests(
     return await builder.execute()
 
 
-async def get_request(
-    client: Client,
+async def get_request_with_client(
+    client: CaidoClient,
     request_id: str,
     *,
     part: RequestPart = "request",
@@ -102,9 +137,6 @@ async def get_request(
     return await client.request.get(request_id, opts)
 
 
-# ----------------------------------------------------------------------
-# Raw HTTP request build / parse / mutate
-# ----------------------------------------------------------------------
 def build_raw_request(
     *,
     method: str,
@@ -131,7 +163,6 @@ def build_raw_request(
     lines = [f"{method.upper()} {path} HTTP/1.1"]
     lines.extend(f"{k}: {v}" for k, v in final_headers.items())
     raw = ("\r\n".join(lines) + "\r\n\r\n" + body).encode("utf-8")
-
     return ConnectionInfoInput(host=host, port=port, is_tls=is_tls), raw
 
 
@@ -183,13 +214,10 @@ def apply_modifications(
         existing = {k: v[0] if v else "" for k, v in parse_qs(parsed.query).items()}
         existing.update(modifications["params"])
         final_url = urlunparse(parsed._replace(query=urlencode(existing)))
-
     if "headers" in modifications:
         headers.update(modifications["headers"])
-
     if "body" in modifications:
         body = modifications["body"]
-
     if "cookies" in modifications:
         cookies: dict[str, str] = {}
         if headers.get("Cookie"):
@@ -208,11 +236,8 @@ def apply_modifications(
     }
 
 
-# ----------------------------------------------------------------------
-# Replay — send raw bytes, get a result
-# ----------------------------------------------------------------------
 async def replay_send_raw(
-    client: Client,
+    client: CaidoClient,
     *,
     raw: bytes,
     connection: ConnectionInfoInput,
@@ -238,19 +263,16 @@ async def replay_send_raw(
     }
 
 
-# ----------------------------------------------------------------------
-# Scope CRUD
-# ----------------------------------------------------------------------
-async def scope_list(client: Client) -> Any:
+async def scope_list(client: CaidoClient) -> Any:
     return await client.scope.list()
 
 
-async def scope_get(client: Client, scope_id: str) -> Any:
+async def scope_get(client: CaidoClient, scope_id: str) -> Any:
     return await client.scope.get(scope_id)
 
 
 async def scope_create(
-    client: Client,
+    client: CaidoClient,
     *,
     name: str,
     allowlist: list[str] | None = None,
@@ -266,7 +288,7 @@ async def scope_create(
 
 
 async def scope_update(
-    client: Client,
+    client: CaidoClient,
     scope_id: str,
     *,
     name: str,
@@ -283,5 +305,133 @@ async def scope_update(
     )
 
 
-async def scope_delete(client: Client, scope_id: str) -> None:
+async def scope_delete(client: CaidoClient, scope_id: str) -> None:
     await client.scope.delete(scope_id)
+
+
+async def list_requests(
+    *,
+    httpql_filter: str | None = None,
+    first: int = 50,
+    after: str | None = None,
+    sort_by: SortBy = "timestamp",
+    sort_order: SortOrder = "desc",
+    scope_id: str | None = None,
+) -> Any:
+    """List captured HTTP requests from sandbox Python."""
+    return await list_requests_with_client(
+        await get_client(),
+        httpql_filter=httpql_filter,
+        first=first,
+        after=after,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        scope_id=scope_id,
+    )
+
+
+async def view_request(request_id: str, *, part: RequestPart = "request") -> Any:
+    """Return one captured request/response from sandbox Python."""
+    return await get_request_with_client(await get_client(), request_id, part=part)
+
+
+async def send_request(
+    method: str,
+    url: str,
+    *,
+    headers: dict[str, str] | None = None,
+    body: str = "",
+) -> dict[str, Any]:
+    """Send an arbitrary raw HTTP request through Caido Replay."""
+    connection, raw = build_raw_request(
+        method=method,
+        url=url,
+        headers=headers or {},
+        body=body,
+    )
+    return await replay_send_raw(await get_client(), raw=raw, connection=connection)
+
+
+async def repeat_request(
+    request_id: str,
+    *,
+    modifications: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Replay a captured request after applying request modifications."""
+    mods = modifications or {}
+    result = await get_request_with_client(await get_client(), request_id, part="request")
+    if result is None or result.request.raw is None:
+        raise ValueError(f"Request {request_id} not found")
+
+    original = result.request
+    raw_str = result.request.raw.decode("utf-8", errors="replace")
+    components = parse_raw_request(raw_str)
+    full_url = full_url_from_components(original, components, mods)
+    modified = apply_modifications(components, mods, full_url)
+    connection, raw = build_raw_request(
+        method=modified["method"],
+        url=modified["url"],
+        headers=modified["headers"],
+        body=modified["body"],
+    )
+    return await replay_send_raw(await get_client(), raw=raw, connection=connection)
+
+
+async def scope_rules(
+    action: ScopeAction,
+    *,
+    allowlist: list[str] | None = None,
+    denylist: list[str] | None = None,
+    scope_id: str | None = None,
+    scope_name: str | None = None,
+) -> Any:
+    """Manage Caido scope rules from sandbox Python."""
+    client = await get_client()
+    if action == "list":
+        result = await scope_list(client)
+    elif action == "get":
+        if not scope_id:
+            raise ValueError("scope_id required for get")
+        result = await scope_get(client, scope_id)
+    elif action == "create":
+        if not scope_name:
+            raise ValueError("scope_name required for create")
+        result = await scope_create(
+            client,
+            name=scope_name,
+            allowlist=allowlist,
+            denylist=denylist,
+        )
+    elif action == "update":
+        if not scope_id or not scope_name:
+            raise ValueError("scope_id and scope_name required for update")
+        result = await scope_update(
+            client,
+            scope_id,
+            name=scope_name,
+            allowlist=allowlist,
+            denylist=denylist,
+        )
+    elif action == "delete":
+        if not scope_id:
+            raise ValueError("scope_id required for delete")
+        await scope_delete(client, scope_id)
+        result = {"deleted": scope_id}
+    else:
+        raise ValueError(f"Unknown action: {action}")
+    return result
+
+
+__all__ = [
+    "RequestPart",
+    "ScopeAction",
+    "SortBy",
+    "SortOrder",
+    "close_client",
+    "get_client",
+    "list_requests",
+    "repeat_request",
+    "scope_rules",
+    "send_request",
+    "view_request",
+]

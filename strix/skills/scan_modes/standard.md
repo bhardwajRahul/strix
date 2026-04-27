@@ -77,7 +77,7 @@ Test each attack surface methodically. Spawn focused subagents for different are
 - Demonstrate actual impact, not theoretical risk
 - Chain vulnerabilities to show maximum severity
 - Document full attack path from entry to impact
-- Use python tool for complex exploit development
+- Use Python scripts through `exec_command` for complex exploit development
 
 ## Phase 5: Reporting
 

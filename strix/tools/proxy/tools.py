@@ -1,10 +1,9 @@
-"""Caido proxy tools — host-side ``@function_tool`` wrappers around ``_calls``.
+"""Caido proxy tools — host-side ``@function_tool`` wrappers.
 
-The five tools delegate to :mod:`strix.tools.proxy._calls` for the actual
+The five tools delegate to :mod:`strix.tools.proxy.caido_api` for the actual
 caido-sdk-client work and add LLM-friendly JSON serialization + error
-wrapping on top. The shared call layer is also reused by the
-``python_action`` tool to expose the same proxy surface inside the
-sandbox's Python kernel — single source of truth for the SDK shapes.
+wrapping on top. The delegated ``caido_api.py`` module is also copied into
+the sandbox image as the importable ``caido_api`` Python module.
 
 Tools: ``list_requests``, ``view_request``, ``send_request``,
 ``repeat_request``, ``scope_rules``.
@@ -22,7 +21,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from agents import RunContextWrapper, function_tool
 
-from strix.tools.proxy import _calls
+from strix.tools.proxy import caido_api
 
 
 logger = logging.getLogger(__name__)
@@ -31,13 +30,13 @@ logger = logging.getLogger(__name__)
 if TYPE_CHECKING:
     from caido_sdk_client import Client
 
-    from strix.tools.proxy._calls import RequestPart, SortBy, SortOrder
+    from strix.tools.proxy.caido_api import RequestPart, SortBy, SortOrder
 else:
     # Runtime import: ``function_tool`` resolves the annotations via
     # ``typing.get_type_hints`` so the Literal aliases must be reachable
     # in module globals at decoration time even though they're "only"
     # used in annotations.
-    from strix.tools.proxy._calls import (  # noqa: TC001
+    from strix.tools.proxy.caido_api import (  # noqa: TC001
         RequestPart,
         SortBy,
         SortOrder,
@@ -52,8 +51,10 @@ def _ctx_client(ctx: RunContextWrapper) -> Client | None:
     return inner.get("caido_client")
 
 
-def _serialize(value: Any) -> Any:
-    """Recursively convert SDK dataclasses/Pydantic objects to JSON-safe primitives."""
+# Tool-output formatting. Caido SDK returns typed Python objects; function
+# tools need compact JSON-safe values for the model and TUI.
+def _to_tool_json(value: Any) -> Any:
+    """Recursively convert SDK dataclasses/Pydantic objects to tool JSON values."""
     if value is None or isinstance(value, str | int | float | bool):
         return value
     if isinstance(value, bytes):
@@ -64,13 +65,13 @@ def _serialize(value: Any) -> Any:
     if isinstance(value, datetime):
         return value.isoformat()
     if is_dataclass(value) and not isinstance(value, type):
-        return {k: _serialize(v) for k, v in dataclasses.asdict(value).items()}
+        return {k: _to_tool_json(v) for k, v in dataclasses.asdict(value).items()}
     if hasattr(value, "model_dump"):
-        return _serialize(value.model_dump())
+        return _to_tool_json(value.model_dump())
     if isinstance(value, dict):
-        return {str(k): _serialize(v) for k, v in value.items()}
+        return {str(k): _to_tool_json(v) for k, v in value.items()}
     if isinstance(value, list | tuple | set):
-        return [_serialize(v) for v in value]
+        return [_to_tool_json(v) for v in value]
     return str(value)
 
 
@@ -145,7 +146,7 @@ async def list_requests(
         return _no_client()
 
     try:
-        connection = await _calls.list_requests(
+        connection = await caido_api.list_requests_with_client(
             client,
             httpql_filter=httpql_filter,
             first=first,
@@ -246,7 +247,7 @@ async def view_request(
         return _no_client()
 
     try:
-        result = await _calls.get_request(client, request_id, part=part)
+        result = await caido_api.get_request_with_client(client, request_id, part=part)
         if result is None:
             return json.dumps(
                 {"success": False, "error": f"Request {request_id} not found"},
@@ -271,10 +272,14 @@ async def view_request(
         content = raw_bytes.decode("utf-8", errors="replace")
 
         if search_pattern:
-            return json.dumps(_regex_hits(content, search_pattern), ensure_ascii=False, default=str)
+            return json.dumps(
+                _format_search_hits(content, search_pattern),
+                ensure_ascii=False,
+                default=str,
+            )
 
         return json.dumps(
-            _paginate_lines(content, page=page, page_size=page_size),
+            _format_text_page(content, page=page, page_size=page_size),
             ensure_ascii=False,
             default=str,
         )
@@ -282,7 +287,7 @@ async def view_request(
         return _err("view_request", exc)
 
 
-def _regex_hits(content: str, pattern: str) -> dict[str, Any]:
+def _format_search_hits(content: str, pattern: str) -> dict[str, Any]:
     try:
         regex = re.compile(pattern)
     except re.error as exc:
@@ -307,7 +312,7 @@ def _regex_hits(content: str, pattern: str) -> dict[str, Any]:
     return {"success": True, "hits": hits, "total_hits": len(hits)}
 
 
-def _paginate_lines(content: str, *, page: int, page_size: int) -> dict[str, Any]:
+def _format_text_page(content: str, *, page: int, page_size: int) -> dict[str, Any]:
     lines = content.splitlines()
     start = max(0, (page - 1) * page_size)
     end = start + page_size
@@ -353,11 +358,11 @@ async def send_request(
         return _no_client()
 
     try:
-        connection, raw = _calls.build_raw_request(
+        connection, raw = caido_api.build_raw_request(
             method=method, url=url, headers=headers or {}, body=body
         )
-        result = await _calls.replay_send_raw(client, raw=raw, connection=connection)
-        return _format_replay_result(result)
+        result = await caido_api.replay_send_raw(client, raw=raw, connection=connection)
+        return _format_replay_tool_result(result)
     except Exception as exc:  # noqa: BLE001
         return _err("send_request", exc)
 
@@ -402,7 +407,7 @@ async def repeat_request(
     mods = modifications or {}
 
     try:
-        result = await _calls.get_request(client, request_id, part="request")
+        result = await caido_api.get_request_with_client(client, request_id, part="request")
         if result is None or result.request.raw is None:
             return json.dumps(
                 {"success": False, "error": f"Request {request_id} not found"},
@@ -412,22 +417,22 @@ async def repeat_request(
 
         original = result.request
         raw_str = result.request.raw.decode("utf-8", errors="replace")
-        components = _calls.parse_raw_request(raw_str)
-        full_url = _calls.full_url_from_components(original, components, mods)
-        modified = _calls.apply_modifications(components, mods, full_url)
-        connection, raw = _calls.build_raw_request(
+        components = caido_api.parse_raw_request(raw_str)
+        full_url = caido_api.full_url_from_components(original, components, mods)
+        modified = caido_api.apply_modifications(components, mods, full_url)
+        connection, raw = caido_api.build_raw_request(
             method=modified["method"],
             url=modified["url"],
             headers=modified["headers"],
             body=modified["body"],
         )
-        replay = await _calls.replay_send_raw(client, raw=raw, connection=connection)
-        return _format_replay_result(replay)
+        replay = await caido_api.replay_send_raw(client, raw=raw, connection=connection)
+        return _format_replay_tool_result(replay)
     except Exception as exc:  # noqa: BLE001
         return _err("repeat_request", exc)
 
 
-def _format_replay_result(replay: dict[str, Any]) -> str:
+def _format_replay_tool_result(replay: dict[str, Any]) -> str:
     response_raw = replay.get("response_raw")
     response: dict[str, Any] | None = None
     if response_raw is not None:
@@ -501,9 +506,9 @@ async def scope_rules(
 
     try:
         if action == "list":
-            scopes = await _calls.scope_list(client)
+            scopes = await caido_api.scope_list(client)
             return json.dumps(
-                {"success": True, "scopes": [_serialize(s) for s in scopes]},
+                {"success": True, "scopes": [_to_tool_json(s) for s in scopes]},
                 ensure_ascii=False,
                 default=str,
             )
@@ -514,9 +519,9 @@ async def scope_rules(
                     ensure_ascii=False,
                     default=str,
                 )
-            scope = await _calls.scope_get(client, scope_id)
+            scope = await caido_api.scope_get(client, scope_id)
             return json.dumps(
-                {"success": True, "scope": _serialize(scope)}, ensure_ascii=False, default=str
+                {"success": True, "scope": _to_tool_json(scope)}, ensure_ascii=False, default=str
             )
         if action == "create":
             if not scope_name:
@@ -525,11 +530,11 @@ async def scope_rules(
                     ensure_ascii=False,
                     default=str,
                 )
-            scope = await _calls.scope_create(
+            scope = await caido_api.scope_create(
                 client, name=scope_name, allowlist=allowlist, denylist=denylist
             )
             return json.dumps(
-                {"success": True, "scope": _serialize(scope)}, ensure_ascii=False, default=str
+                {"success": True, "scope": _to_tool_json(scope)}, ensure_ascii=False, default=str
             )
         if action == "update":
             if not scope_id or not scope_name:
@@ -541,11 +546,11 @@ async def scope_rules(
                     ensure_ascii=False,
                     default=str,
                 )
-            scope = await _calls.scope_update(
+            scope = await caido_api.scope_update(
                 client, scope_id, name=scope_name, allowlist=allowlist, denylist=denylist
             )
             return json.dumps(
-                {"success": True, "scope": _serialize(scope)}, ensure_ascii=False, default=str
+                {"success": True, "scope": _to_tool_json(scope)}, ensure_ascii=False, default=str
             )
         # action == "delete" — exhaustive Literal
         if not scope_id:
@@ -554,7 +559,7 @@ async def scope_rules(
                 ensure_ascii=False,
                 default=str,
             )
-        await _calls.scope_delete(client, scope_id)
+        await caido_api.scope_delete(client, scope_id)
         return json.dumps({"success": True, "deleted": scope_id}, ensure_ascii=False, default=str)
     except Exception as exc:  # noqa: BLE001
         return _err("scope_rules", exc)

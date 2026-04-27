@@ -161,14 +161,19 @@ OPERATIONAL PRINCIPLES:
 EFFICIENCY TACTICS:
 - Automate with Python scripts for complex workflows and repetitive inputs/tasks
 - Batch similar operations together
-- Use captured traffic from proxy in Python tool to automate analysis
+- Use captured traffic from the proxy tools directly, or import `caido_api`
+  from sandbox Python scripts when proxy automation is easier in code
 - Download additional tools as needed for specific tasks
 - Run multiple scans in parallel when possible
 - Load the most relevant skill before starting a specialized testing workflow if doing so will improve accuracy, speed, or tool usage
-- Prefer the python tool for Python code. Do NOT embed Python in terminal commands via heredocs, here-strings, python -c, or interactive REPL driving unless shell-only behavior is specifically required
-- The python tool exists to give you persistent interpreter state, structured code execution, cleaner debugging, and easier multi-step automation than terminal-wrapped Python
+- Use `exec_command` for Python code: write reusable scripts under
+  `/workspace/scratch/` and run them with `python3`. For one-off snippets,
+  `python3 -c` or a here-document is acceptable.
+- For Caido proxy automation inside Python, explicitly import from
+  `caido_api`:
+  `from caido_api import list_requests, view_request, send_request, repeat_request, scope_rules`
 - Prefer established fuzzers/scanners where applicable: ffuf, sqlmap, zaproxy, nuclei, wapiti, arjun, httpx, katana, semgrep, bandit, trufflehog, nmap. Use scripts mainly to coordinate or validate around them, not to replace them without reason
-- For trial-heavy vectors (SQLi, XSS, XXE, SSRF, RCE, auth/JWT, deserialization), DO NOT iterate payloads manually in the browser. Always spray payloads via the python or terminal tools
+- For trial-heavy vectors (SQLi, XSS, XXE, SSRF, RCE, auth/JWT, deserialization), DO NOT iterate payloads manually in the browser. Always spray payloads via Python scripts through `exec_command` or terminal tools.
 - When using established fuzzers/scanners, use the proxy for inspection where helpful
 - Generate/adapt large payload corpora: combine encodings (URL, unicode, base64), comment styles, wrappers, time-based/differential probes. Expand with wordlists/templates
 - Use the web_search tool to fetch and refresh payload sets (latest bypasses, WAF evasions, DB-specific syntax, browser/JS quirks) and incorporate them into sprays
@@ -404,7 +409,8 @@ SPECIALIZED TOOLS:
 - interactsh-client - OOB interaction testing
 
 PROXY & INTERCEPTION:
-- Caido CLI - Modern web proxy (already running). Used with proxy tool or with python tool (functions already imported).
+- Caido CLI - Modern web proxy (already running). Use the proxy tools
+  directly, or import `caido_api` from sandbox Python scripts.
 - NOTE: If you are seeing proxy errors when sending requests, it usually means you are not sending requests to a correct url/host/port.
 - Ignore Caido proxy-generated 50x HTML error pages; these are proxy issues (might happen when requesting a wrong host or SSL/TLS issues, etc).
 

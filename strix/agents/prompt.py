@@ -37,8 +37,8 @@ def _resolve_skills(
     2. ``scan_modes/<mode>`` (always).
     3. ``tooling/agent_browser`` (always — every agent has shell + the
        agent-browser CLI).
-    4. ``tooling/python`` (always — every agent has the ``python_action``
-       tool with proxy helpers pre-bound).
+    4. ``tooling/python`` (always — Python runs through ``exec_command``;
+       sandbox scripts can import ``caido_api`` for Caido automation).
     5. ``coordination/root_agent`` for the root agent only — orchestration
        guidance for delegating to specialist subagents.
     6. Whitebox-specific skills if applicable.

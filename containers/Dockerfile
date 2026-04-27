@@ -78,13 +78,6 @@ RUN pipx install arjun && \
     pipx inject dirsearch setuptools && \
     pipx install wafw00f
 
-# ``python_action`` ships a fresh ``caido-sdk-client`` per call into /tmp.
-# Install it system-wide so the driver's ``import caido_sdk_client`` resolves
-# without venv activation. The helper *logic* lives host-side in
-# ``strix/tools/proxy/_calls.py`` (shipped at runtime) — only the SDK dep
-# is image-baked.
-RUN pip install --break-system-packages --no-cache-dir caido-sdk-client
-
 ENV NPM_CONFIG_PREFIX=/home/pentester/.npm-global
 RUN mkdir -p /home/pentester/.npm-global
 
@@ -198,8 +191,12 @@ RUN mkdir -p /workspace && chown -R pentester:pentester /workspace /app
 
 USER pentester
 RUN python3 -m venv /app/.venv && \
+    /app/.venv/bin/pip install --no-cache-dir caido-sdk-client && \
     /app/.venv/bin/pip install --no-cache-dir -r /home/pentester/tools/jwt_tool/requirements.txt && \
     ln -s /home/pentester/tools/jwt_tool/jwt_tool.py /home/pentester/.local/bin/jwt_tool
+
+COPY --chown=pentester:pentester strix/tools/proxy/caido_api.py /opt/strix-python/caido_api.py
+ENV PYTHONPATH=/opt/strix-python
 
 RUN echo 'export PATH="/home/pentester/go/bin:/home/pentester/.local/bin:/home/pentester/.npm-global/bin:$PATH"' >> /home/pentester/.bashrc && \
     echo 'export PATH="/home/pentester/go/bin:/home/pentester/.local/bin:/home/pentester/.npm-global/bin:$PATH"' >> /home/pentester/.profile
