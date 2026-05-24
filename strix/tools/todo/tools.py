@@ -325,10 +325,25 @@ async def create_todo(
     agent_id = _agent_id_from(ctx)
     try:
         default_priority = _normalize_priority(priority)
+        single_mode = bool(title and title.strip())
+        bulk_mode = todos is not None and str(todos).strip() != ""
+        if single_mode and bulk_mode:
+            return json.dumps(
+                {
+                    "success": False,
+                    "error": (
+                        "Pass either `title` (single create) or `todos` (bulk create), "
+                        "not both. To batch related todos, use `todos` only."
+                    ),
+                    "todo_id": None,
+                },
+                ensure_ascii=False,
+                default=str,
+            )
         tasks: list[dict[str, Any]] = []
-        if todos is not None:
+        if bulk_mode:
             tasks.extend(_normalize_bulk_todos(todos))
-        if title and title.strip():
+        elif title is not None and title.strip():
             tasks.append(
                 {
                     "title": title.strip(),
@@ -473,10 +488,24 @@ async def update_todo(
     agent_id = _agent_id_from(ctx)
     try:
         agent_todos = _get_agent_todos(agent_id)
+        single_mode = todo_id is not None and str(todo_id).strip() != ""
+        bulk_mode = updates is not None and str(updates).strip() != ""
+        if single_mode and bulk_mode:
+            return json.dumps(
+                {
+                    "success": False,
+                    "error": (
+                        "Pass either `todo_id` (single update) or `updates` (bulk update), "
+                        "not both. To batch updates, use `updates` only."
+                    ),
+                },
+                ensure_ascii=False,
+                default=str,
+            )
         updates_to_apply: list[dict[str, Any]] = []
-        if updates is not None:
+        if bulk_mode:
             updates_to_apply.extend(_normalize_bulk_updates(updates))
-        if todo_id is not None:
+        elif single_mode:
             updates_to_apply.append(
                 {
                     "todo_id": todo_id,
@@ -534,10 +563,24 @@ def _mark(
 ) -> str:
     try:
         agent_todos = _get_agent_todos(agent_id)
+        single_mode = todo_id is not None and str(todo_id).strip() != ""
+        bulk_mode = todo_ids is not None and str(todo_ids).strip() != ""
+        if single_mode and bulk_mode:
+            return json.dumps(
+                {
+                    "success": False,
+                    "error": (
+                        "Pass either `todo_id` (single) or `todo_ids` (bulk), not both. "
+                        "To batch, use `todo_ids` only."
+                    ),
+                },
+                ensure_ascii=False,
+                default=str,
+            )
         ids: list[str] = []
-        if todo_ids is not None:
+        if bulk_mode:
             ids.extend(_normalize_todo_ids(todo_ids))
-        if todo_id is not None:
+        elif todo_id is not None and str(todo_id).strip():
             ids.append(todo_id)
         if not ids:
             msg = f"Provide todo_id or todo_ids to mark as {new_status}."
@@ -581,10 +624,12 @@ async def mark_todo_done(
 ) -> str:
     """Mark one or many todos as done.
 
+    Pass either ``todo_id`` (single) or ``todo_ids`` (bulk), not both.
+
     Args:
         todo_id: Single todo's ID.
         todo_ids: Bulk form — JSON array, comma-separated string, or
-            single ID. Combinable with ``todo_id`` for one-off plus bulk.
+            single ID.
     """
     return _mark(
         agent_id=_agent_id_from(ctx),
@@ -601,6 +646,8 @@ async def mark_todo_pending(
     todo_ids: str | None = None,
 ) -> str:
     """Reset one or many todos to pending (e.g., to retry a failed task).
+
+    Pass either ``todo_id`` (single) or ``todo_ids`` (bulk), not both.
 
     Args:
         todo_id: Single todo's ID.
@@ -622,6 +669,8 @@ async def delete_todo(
 ) -> str:
     """Delete one or many todos. Removes them entirely (no soft-delete).
 
+    Pass either ``todo_id`` (single) or ``todo_ids`` (bulk), not both.
+
     Args:
         todo_id: Single todo's ID.
         todo_ids: Bulk form — JSON array, comma-separated, or single ID.
@@ -629,10 +678,24 @@ async def delete_todo(
     agent_id = _agent_id_from(ctx)
     try:
         agent_todos = _get_agent_todos(agent_id)
+        single_mode = todo_id is not None and str(todo_id).strip() != ""
+        bulk_mode = todo_ids is not None and str(todo_ids).strip() != ""
+        if single_mode and bulk_mode:
+            return json.dumps(
+                {
+                    "success": False,
+                    "error": (
+                        "Pass either `todo_id` (single) or `todo_ids` (bulk), not both. "
+                        "To batch, use `todo_ids` only."
+                    ),
+                },
+                ensure_ascii=False,
+                default=str,
+            )
         ids: list[str] = []
-        if todo_ids is not None:
+        if bulk_mode:
             ids.extend(_normalize_todo_ids(todo_ids))
-        if todo_id is not None:
+        elif todo_id is not None and str(todo_id).strip():
             ids.append(todo_id)
         if not ids:
             return json.dumps(

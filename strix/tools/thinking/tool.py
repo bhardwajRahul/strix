@@ -34,10 +34,4 @@ async def think(thought: str) -> str:
     """
     if not thought or not thought.strip():
         return json.dumps({"success": False, "message": "Thought cannot be empty"})
-    return json.dumps(
-        {
-            "success": True,
-            "message": (f"Thought recorded successfully with {len(thought.strip())} characters"),
-        },
-        ensure_ascii=False,
-    )
+    return json.dumps({"success": True, "message": "Thought recorded"})
