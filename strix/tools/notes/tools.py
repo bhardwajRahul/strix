@@ -176,14 +176,7 @@ def _create_note_impl(
                     "note_id": None,
                 }
 
-            note_id = ""
-            for _ in range(20):
-                candidate = str(uuid.uuid4())[:5]
-                if candidate not in _notes_storage:
-                    note_id = candidate
-                    break
-            if not note_id:
-                return {"success": False, "error": "Failed to allocate note ID", "note_id": None}
+            note_id = str(uuid.uuid4())[:6]
 
             timestamp = datetime.now(UTC).isoformat()
             note = {
