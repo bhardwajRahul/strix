@@ -140,6 +140,18 @@ async def list_requests(
     Pagination is cursor-based. Pass the ``end_cursor`` from the
     ``page_info`` of one call as ``after`` to the next.
 
+    Notes:
+
+    - HTTPQL has **no ``NOT`` operator**. Use the negated form of the
+      operator instead: ``ne``, ``ncont``, ``nlike``, ``nregex``
+      (e.g. ``req.path.ncont:"/static"`` to exclude static paths).
+    - String values **must be quoted**; integer values **must not**.
+      ``resp.code.eq:200`` is right; ``resp.code.eq:"200"`` is a parse
+      error. Same rule for ``cont`` / ``regex`` strings.
+    - A bare quoted string searches both ``req.raw`` and ``resp.raw``,
+      handy for sensitive-data sweeps:
+      ``"password" OR "secret" OR "api_key"``.
+
     Args:
         httpql_filter: Caido HTTPQL query (optional).
         first: Number of entries to return (default 50).
