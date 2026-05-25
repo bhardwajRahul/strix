@@ -15,12 +15,20 @@ import asyncio
 import json
 import logging
 import uuid
+from collections import Counter
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 from agents import RunContextWrapper, function_tool
 
-from strix.core.agents import coordinator_from_context
+from strix.core.agents import Status, coordinator_from_context
+from strix.skills import validate_requested_skills
+
+
+# An agent is "active" when stop_agent can meaningfully act on it. Anything
+# else (completed / stopped / crashed / failed) is terminal — request_stop
+# would forcibly overwrite that status, erasing the original outcome.
+_ACTIVE_STATUSES: frozenset[str] = frozenset({"running", "waiting"})
 
 
 logger = logging.getLogger(__name__)
@@ -107,14 +115,13 @@ async def view_agent_graph(ctx: RunContextWrapper) -> str:
     for root in roots:
         render(root, 0)
 
-    summary = {
-        "total": len(parent_of),
-        "running": sum(1 for s in statuses.values() if s == "running"),
-        "waiting": sum(1 for s in statuses.values() if s == "waiting"),
-        "completed": sum(1 for s in statuses.values() if s == "completed"),
-        "crashed": sum(1 for s in statuses.values() if s == "crashed"),
-        "stopped": sum(1 for s in statuses.values() if s == "stopped"),
-    }
+    # Derive per-status counts from the canonical ``Status`` literal so a
+    # new status added in core.agents auto-flows into this summary without
+    # the buckets silently going out of sync with the source of truth.
+    counts = Counter(statuses.values())
+    summary: dict[str, int] = {"total": len(parent_of)}
+    for status_name in get_args(Status):
+        summary[status_name] = counts.get(status_name, 0)
     return json.dumps(
         {
             "success": True,
@@ -166,6 +173,18 @@ async def send_message_to_agent(
     if coordinator is None or me is None:
         return json.dumps(
             {"success": False, "error": "Agent coordinator or agent_id missing in context."},
+            ensure_ascii=False,
+            default=str,
+        )
+    if target_agent_id == me:
+        return json.dumps(
+            {
+                "success": False,
+                "error": (
+                    "Cannot send a message to yourself. Use `think` to record a "
+                    "private note, or `agent_finish` / `finish_scan` to terminate."
+                ),
+            },
             ensure_ascii=False,
             default=str,
         )
@@ -263,7 +282,7 @@ async def wait_for_message(  # noqa: PLR0911
         return json.dumps(
             {
                 "success": True,
-                "status": "stopped",
+                "wait_outcome": "stopped",
                 "reason": reason,
                 "note": "Wait ended because this agent is stopped.",
             },
@@ -277,7 +296,7 @@ async def wait_for_message(  # noqa: PLR0911
         return json.dumps(
             {
                 "success": True,
-                "status": "message_arrived",
+                "wait_outcome": "message_arrived",
                 "pending_messages": pending,
                 "messages": _session_items_payload(items),
                 "reason": reason,
@@ -291,8 +310,7 @@ async def wait_for_message(  # noqa: PLR0911
         return json.dumps(
             {
                 "success": True,
-                "status": "waiting",
-                "agent_waiting": True,
+                "wait_outcome": "waiting",
                 "reason": reason,
                 "note": "Agent parked; execution will resume when a message arrives.",
             },
@@ -308,7 +326,7 @@ async def wait_for_message(  # noqa: PLR0911
         return json.dumps(
             {
                 "success": True,
-                "status": "timeout",
+                "wait_outcome": "timeout",
                 "timeout_seconds": timeout_seconds,
                 "reason": reason,
                 "note": "No messages within timeout — continue work or call agent_finish.",
@@ -323,7 +341,7 @@ async def wait_for_message(  # noqa: PLR0911
         return json.dumps(
             {
                 "success": True,
-                "status": "stopped",
+                "wait_outcome": "stopped",
                 "reason": reason,
                 "note": "Wait ended because this agent is stopped.",
             },
@@ -337,7 +355,7 @@ async def wait_for_message(  # noqa: PLR0911
     return json.dumps(
         {
             "success": True,
-            "status": "message_arrived",
+            "wait_outcome": "message_arrived",
             "pending_messages": pending,
             "messages": _session_items_payload(items),
             "reason": reason,
@@ -415,6 +433,15 @@ async def create_agent(
             default=str,
         )
 
+    skill_list = list(skills or [])
+    skill_error = validate_requested_skills(skill_list)
+    if skill_error:
+        return json.dumps(
+            {"success": False, "error": skill_error, "agent_id": None},
+            ensure_ascii=False,
+            default=str,
+        )
+
     # ``ctx.turn_input`` carries the parent's full conversation up to and
     # including the call that's currently invoking ``create_agent``.
     parent_history = list(ctx.turn_input) if inherit_context and ctx.turn_input else []
@@ -423,7 +450,7 @@ async def create_agent(
             parent_ctx=inner,
             name=name,
             task=task,
-            skills=list(skills or []),
+            skills=skill_list,
             parent_history=parent_history,
         )
     except Exception as e:
@@ -439,7 +466,7 @@ async def create_agent(
         result.get("agent_id"),
         name,
         parent_id or "-",
-        len(skills or []),
+        len(skill_list),
         len(task or ""),
     )
 
@@ -508,11 +535,9 @@ async def agent_finish(
         return json.dumps(
             {
                 "success": False,
-                "agent_completed": False,
                 "error": (
                     "agent_finish is for subagents. Root/main agents must call finish_scan instead."
                 ),
-                "parent_notified": False,
             },
             ensure_ascii=False,
             default=str,
@@ -617,6 +642,25 @@ async def stop_agent(
     if target_agent_id not in statuses:
         return json.dumps(
             {"success": False, "error": f"Unknown agent_id: {target_agent_id}"},
+            ensure_ascii=False,
+            default=str,
+        )
+
+    current_status = statuses[target_agent_id]
+    if current_status not in _ACTIVE_STATUSES:
+        return json.dumps(
+            {
+                "success": False,
+                "error": (
+                    f"Agent {target_agent_id} is already '{current_status}'; "
+                    "stop_agent only acts on running/waiting agents. Use "
+                    "view_agent_graph to find still-active descendants and "
+                    "stop them individually, or send_message_to_agent if you "
+                    "want to wake this one with new instructions."
+                ),
+                "target_agent_id": target_agent_id,
+                "current_status": current_status,
+            },
             ensure_ascii=False,
             default=str,
         )

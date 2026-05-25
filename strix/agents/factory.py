@@ -213,8 +213,7 @@ def _wait_tool_parked(tool_name: str, output: Any) -> bool:
     return bool(
         isinstance(parsed, dict)
         and parsed.get("success")
-        and parsed.get("agent_waiting")
-        and parsed.get("status") == "waiting"
+        and parsed.get("wait_outcome") == "waiting"
     )
 
 
