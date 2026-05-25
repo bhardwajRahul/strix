@@ -1,5 +1,6 @@
 import logging
 import re
+from collections.abc import Iterator
 
 from strix.utils.resource_paths import get_strix_resource_path
 
@@ -14,25 +15,31 @@ _FRONTMATTER_PATTERN = re.compile(r"^---\s*\n.*?\n---\s*\n", re.DOTALL)
 _INTERNAL_SKILL_CATEGORIES: frozenset[str] = frozenset({"scan_modes", "coordination"})
 
 
-def get_all_skill_names() -> set[str]:
-    """Return every user-selectable skill name (bare, no category prefix).
-
-    Used by :func:`validate_requested_skills` so ``create_agent`` can
-    reject typos / hallucinated names with a useful list, and by callers
-    that need to enumerate the catalog.
-    """
+def _iter_user_skill_files() -> Iterator[tuple[str, str]]:
+    """Yield ``(category_name, skill_name)`` for every user-selectable skill."""
     skills_dir = get_strix_resource_path("skills")
     if not skills_dir.exists():
-        return set()
-    names: set[str] = set()
-    for category_dir in skills_dir.iterdir():
+        return
+    for category_dir in sorted(skills_dir.iterdir()):
         if not category_dir.is_dir() or category_dir.name.startswith("__"):
             continue
         if category_dir.name in _INTERNAL_SKILL_CATEGORIES:
             continue
-        for file_path in category_dir.glob("*.md"):
-            names.add(file_path.stem)
-    return names
+        for file_path in sorted(category_dir.glob("*.md")):
+            yield category_dir.name, file_path.stem
+
+
+def get_all_skill_names() -> set[str]:
+    """Return every user-selectable skill name (bare, no category prefix)."""
+    return {name for _, name in _iter_user_skill_files()}
+
+
+def get_available_skills() -> dict[str, list[str]]:
+    """Return user-selectable skills grouped by category, alphabetised."""
+    grouped: dict[str, list[str]] = {}
+    for category, name in _iter_user_skill_files():
+        grouped.setdefault(category, []).append(name)
+    return grouped
 
 
 def validate_requested_skills(skill_list: list[str], max_skills: int = 5) -> str | None:

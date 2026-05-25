@@ -40,6 +40,7 @@ from strix.tools.agents_graph.tools import (
     wait_for_message,
 )
 from strix.tools.finish.tool import finish_scan
+from strix.tools.load_skill.tool import load_skill
 from strix.tools.notes.tools import (
     create_note,
     delete_note,
@@ -342,6 +343,8 @@ def _finish_tool_use_behavior(
 _BASE_TOOLS: tuple[Tool, ...] = (
     # Thinking + planning
     think,
+    # On-demand skill reference (returns the skill markdown inline)
+    load_skill,
     # Per-agent todos
     create_todo,
     list_todos,

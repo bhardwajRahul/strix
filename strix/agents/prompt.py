@@ -12,7 +12,7 @@ from typing import Any
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from strix.skills import load_skills
+from strix.skills import get_available_skills, load_skills
 from strix.utils.resource_paths import get_strix_resource_path
 
 
@@ -114,6 +114,7 @@ def render_system_prompt(
 
         rendered = env.get_template("system_prompt.jinja").render(
             loaded_skill_names=list(skill_content.keys()),
+            available_skills=get_available_skills(),
             interactive=interactive,
             system_prompt_context=system_prompt_context or {},
             **skill_content,

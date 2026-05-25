@@ -437,3 +437,13 @@ Default user: pentester (sudo available)
 {% endfor %}
 </specialized_knowledge>
 {% endif %}
+
+{% if available_skills %}
+<available_skills>
+On-demand specialist skills. Spawn a specialist via `create_agent(skills=[...])`, or pull guidance inline for yourself via `load_skill(skills=[...])`. Anything wrapped in `<specialized_knowledge>` above is already loaded for you.
+
+{% for category, names in available_skills | dictsort -%}
+- {{ category }}: {{ names | join(', ') }}
+{% endfor -%}
+</available_skills>
+{% endif %}
