@@ -75,7 +75,7 @@ RUN nuclei -update-templates
 
 RUN pipx install arjun && \
     pipx install dirsearch && \
-    pipx inject dirsearch setuptools && \
+    pipx inject dirsearch 'setuptools<81' && \
     pipx install wafw00f
 
 ENV NPM_CONFIG_PREFIX=/home/pentester/.npm-global
@@ -193,7 +193,11 @@ USER pentester
 RUN python3 -m venv /app/.venv && \
     /app/.venv/bin/pip install --no-cache-dir caido-sdk-client && \
     /app/.venv/bin/pip install --no-cache-dir -r /home/pentester/tools/jwt_tool/requirements.txt && \
-    ln -s /home/pentester/tools/jwt_tool/jwt_tool.py /home/pentester/.local/bin/jwt_tool
+    printf '%s\n' \
+        '#!/bin/bash' \
+        'exec /app/.venv/bin/python /home/pentester/tools/jwt_tool/jwt_tool.py "$@"' \
+        > /home/pentester/.local/bin/jwt_tool && \
+    chmod +x /home/pentester/.local/bin/jwt_tool
 
 COPY --chown=pentester:pentester strix/tools/proxy/caido_api.py /opt/strix-python/caido_api.py
 ENV PYTHONPATH=/opt/strix-python

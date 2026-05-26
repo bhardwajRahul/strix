@@ -121,6 +121,23 @@ trivy fs --scanners vuln,misconfig --timeout 30m --offline-scan \
   --format json --output /workspace/.strix-source-aware/trivy-fs.json . || true
 ```
 
+## JavaScript-Side Coverage
+
+For frontends and Node services, layer these on top of the language-agnostic
+passes above:
+
+```bash
+retire --path . --outputformat json --outputpath /workspace/.strix-source-aware/retire.json || true
+eslint --no-config-lookup --rule '{"no-eval":2,"no-implied-eval":2}' \
+  -f json -o /workspace/.strix-source-aware/eslint.json . || true
+```
+
+When you hit a minified bundle, run `js-beautify <file>` for a readable
+view before greppping — and use `jshint --reporter=unix <file>` as a
+lighter syntax/anti-pattern check when ESLint is over-eager. The
+`JS-Snooper` / `jsniper.sh` tools (in `katana.md`) are the right next
+step to mine those bundles for endpoint candidates.
+
 ## Converting Static Signals Into Exploits
 
 1. Rank candidates by impact and exploitability.

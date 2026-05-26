@@ -30,6 +30,8 @@ Thorough understanding before exploitation. Test every parameter, every endpoint
 - Review file handling: upload, download, processing
 - Understand the deployment model and infrastructure assumptions
 - Check all dependency versions and repository risks against CVE/misconfiguration data
+- For quick CVE lookups on a named product/version, use `vulnx search <query>`
+  (ProjectDiscovery's CVE database) before falling back to web_search
 
 **Blackbox (no source)**
 - Exhaustive subdomain enumeration with multiple sources and tools

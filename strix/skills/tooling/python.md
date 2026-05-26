@@ -88,3 +88,13 @@ For iterative exploit work, put code in a file:
 2. Run it with `exec_command`: `python3 /workspace/scratch/exploit.py`.
 3. Edit and rerun until the proof-of-concept is reliable.
 ```
+
+## Installing extra packages
+
+The sandbox's Python lives in `/app/.venv`. To add a one-off dependency
+for an exploit script, use `uv` (already in the image and much faster
+than pip):
+
+```bash
+uv pip install --python /app/.venv/bin/python <package>
+```
