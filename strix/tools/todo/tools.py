@@ -288,14 +288,10 @@ def _apply_single_update(
 
 
 @function_tool(timeout=30)
-async def create_todo(
-    ctx: RunContextWrapper,
-    title: str | None = None,
-    description: str | None = None,
-    priority: str = "normal",
-    todos: str | None = None,
-) -> str:
+async def create_todo(ctx: RunContextWrapper, todos: str) -> str:
     """Create one or many todos for the current agent.
+
+    Always pass a list, even for a single todo (wrap it in a one-item array).
 
     Each agent (including subagents) has its **own private todo list** —
     your todos don't leak to other agents and vice versa.
@@ -311,53 +307,27 @@ async def create_todo(
     - Simple linear workflows where progress is obvious.
     - Single quick task — just do it.
 
-    Batch related todos in one call via the ``todos`` bulk parameter
-    rather than firing many ``create_todo`` calls.
-
     Args:
-        title: Short, actionable title (e.g., "Test /api/admin for IDOR").
-        description: Optional details / context for the single todo.
-        priority: ``"low"`` / ``"normal"`` / ``"high"`` / ``"critical"``.
-        todos: Bulk create — either JSON array of
-            ``{"title": "...", "description": "...", "priority": "..."}``
-            objects, or a newline-separated bullet list (``- item\\n- item``).
+        todos: JSON array of todo objects. For one todo, pass a one-item
+            list. Each object's fields:
+
+            - ``title`` (str, **required**): short actionable title,
+              e.g. ``"Test /api/admin for IDOR"``.
+            - ``description`` (str, optional): extra context or
+              acceptance criteria.
+            - ``priority`` (str, optional): one of ``"low"`` /
+              ``"normal"`` / ``"high"`` / ``"critical"``. Defaults to
+              ``"normal"``.
+
+            Example: ``[{"title": "Probe /admin", "priority": "high"},
+            {"title": "Check JWT alg=none"}]``.
     """
     agent_id = _agent_id_from(ctx)
     try:
-        default_priority = _normalize_priority(priority)
-        single_mode = bool(title and title.strip())
-        bulk_mode = todos is not None and str(todos).strip() != ""
-        if single_mode and bulk_mode:
-            return json.dumps(
-                {
-                    "success": False,
-                    "error": (
-                        "Pass either `title` (single create) or `todos` (bulk create), "
-                        "not both. To batch related todos, use `todos` only."
-                    ),
-                    "todo_id": None,
-                },
-                ensure_ascii=False,
-                default=str,
-            )
-        tasks: list[dict[str, Any]] = []
-        if bulk_mode:
-            tasks.extend(_normalize_bulk_todos(todos))
-        elif title is not None and title.strip():
-            tasks.append(
-                {
-                    "title": title.strip(),
-                    "description": description.strip() if description else None,
-                    "priority": default_priority,
-                },
-            )
+        tasks = _normalize_bulk_todos(todos)
         if not tasks:
             return json.dumps(
-                {
-                    "success": False,
-                    "error": "Provide a title or 'todos' list to create.",
-                    "todo_id": None,
-                },
+                {"success": False, "error": "Provide a non-empty 'todos' list to create."},
                 ensure_ascii=False,
                 default=str,
             )
@@ -365,7 +335,7 @@ async def create_todo(
         agent_todos = _get_agent_todos(agent_id)
         created: list[dict[str, Any]] = []
         for task in tasks:
-            task_priority = _normalize_priority(task.get("priority"), default_priority)
+            task_priority = _normalize_priority(task.get("priority"))
             todo_id = str(uuid.uuid4())[:6]
             timestamp = datetime.now(UTC).isoformat()
             agent_todos[todo_id] = {
@@ -380,7 +350,7 @@ async def create_todo(
             created.append({"todo_id": todo_id, "title": task["title"], "priority": task_priority})
     except (ValueError, TypeError) as e:
         return json.dumps(
-            {"success": False, "error": f"Failed to create todo: {e}", "todo_id": None},
+            {"success": False, "error": f"Failed to create todo: {e}"},
             ensure_ascii=False,
             default=str,
         )
@@ -390,7 +360,7 @@ async def create_todo(
         {
             "success": True,
             "created": created,
-            "count": len(created),
+            "created_count": len(created),
             "todos": _sorted_todos(agent_id),
             "total_count": len(_get_agent_todos(agent_id)),
         },
@@ -443,6 +413,7 @@ async def list_todos(
                 "success": False,
                 "error": f"Failed to list todos: {e}",
                 "todos": [],
+                "filtered_count": 0,
                 "total_count": 0,
                 "summary": {"pending": 0, "in_progress": 0, "done": 0},
             },
@@ -454,7 +425,8 @@ async def list_todos(
         {
             "success": True,
             "todos": todos_list,
-            "total_count": len(todos_list),
+            "filtered_count": len(todos_list),
+            "total_count": len(agent_todos),
             "summary": summary,
         },
         ensure_ascii=False,
@@ -463,61 +435,41 @@ async def list_todos(
 
 
 @function_tool(timeout=30)
-async def update_todo(
-    ctx: RunContextWrapper,
-    todo_id: str | None = None,
-    title: str | None = None,
-    description: str | None = None,
-    priority: str | None = None,
-    status: str | None = None,
-    updates: str | None = None,
-) -> str:
-    """Update one or many todos. Prefer the bulk form for multiple updates.
+async def update_todo(ctx: RunContextWrapper, updates: str) -> str:
+    """Update one or many todos.
 
-    For toggling status only, use the dedicated ``mark_todo_done`` /
-    ``mark_todo_pending`` tools — they're simpler and accept bulk
-    ``todo_ids``.
+    Always pass a list, even for a single update (wrap it in a one-item
+    array).
+
+    For toggling status only, prefer the dedicated ``mark_todo_done`` /
+    ``mark_todo_pending`` tools — they're simpler and accept the same
+    list-of-ids form.
 
     Args:
-        todo_id: Single-todo target.
-        title / description / priority / status: New values for the
-            single todo. Omit to leave unchanged.
-        updates: Bulk form — JSON array like
-            ``[{"todo_id": "abc", "status": "done"}, ...]``.
+        updates: JSON array of update objects. For one update, pass a
+            one-item list. Each object's fields:
+
+            - ``todo_id`` (str, **required**): ID returned by
+              ``create_todo``.
+            - ``title`` (str, optional): new title.
+            - ``description`` (str, optional): new description (empty
+              string clears it).
+            - ``priority`` (str, optional): one of ``"low"`` /
+              ``"normal"`` / ``"high"`` / ``"critical"``.
+            - ``status`` (str, optional): one of ``"pending"`` /
+              ``"in_progress"`` / ``"done"``.
+
+            Omitted fields stay unchanged. Example:
+            ``[{"todo_id": "abc", "status": "in_progress",
+            "priority": "high"}]``.
     """
     agent_id = _agent_id_from(ctx)
     try:
         agent_todos = _get_agent_todos(agent_id)
-        single_mode = todo_id is not None and str(todo_id).strip() != ""
-        bulk_mode = updates is not None and str(updates).strip() != ""
-        if single_mode and bulk_mode:
-            return json.dumps(
-                {
-                    "success": False,
-                    "error": (
-                        "Pass either `todo_id` (single update) or `updates` (bulk update), "
-                        "not both. To batch updates, use `updates` only."
-                    ),
-                },
-                ensure_ascii=False,
-                default=str,
-            )
-        updates_to_apply: list[dict[str, Any]] = []
-        if bulk_mode:
-            updates_to_apply.extend(_normalize_bulk_updates(updates))
-        elif single_mode:
-            updates_to_apply.append(
-                {
-                    "todo_id": todo_id,
-                    "title": title,
-                    "description": description,
-                    "priority": priority,
-                    "status": status,
-                },
-            )
+        updates_to_apply = _normalize_bulk_updates(updates)
         if not updates_to_apply:
             return json.dumps(
-                {"success": False, "error": "Provide todo_id or 'updates' list to update."},
+                {"success": False, "error": "Provide a non-empty 'updates' list."},
                 ensure_ascii=False,
                 default=str,
             )
@@ -554,36 +506,12 @@ async def update_todo(
     return json.dumps(response, ensure_ascii=False, default=str)
 
 
-def _mark(
-    *,
-    agent_id: str,
-    todo_id: str | None,
-    todo_ids: str | None,
-    new_status: str,
-) -> str:
+def _mark(*, agent_id: str, todo_ids: str, new_status: str) -> str:
     try:
         agent_todos = _get_agent_todos(agent_id)
-        single_mode = todo_id is not None and str(todo_id).strip() != ""
-        bulk_mode = todo_ids is not None and str(todo_ids).strip() != ""
-        if single_mode and bulk_mode:
-            return json.dumps(
-                {
-                    "success": False,
-                    "error": (
-                        "Pass either `todo_id` (single) or `todo_ids` (bulk), not both. "
-                        "To batch, use `todo_ids` only."
-                    ),
-                },
-                ensure_ascii=False,
-                default=str,
-            )
-        ids: list[str] = []
-        if bulk_mode:
-            ids.extend(_normalize_todo_ids(todo_ids))
-        elif todo_id is not None and str(todo_id).strip():
-            ids.append(todo_id)
+        ids = _normalize_todo_ids(todo_ids)
         if not ids:
-            msg = f"Provide todo_id or todo_ids to mark as {new_status}."
+            msg = f"Provide a non-empty 'todo_ids' list to mark as {new_status}."
             return json.dumps({"success": False, "error": msg}, ensure_ascii=False, default=str)
 
         marked: list[str] = []
@@ -603,11 +531,11 @@ def _mark(
 
     if marked:
         _persist()
-    key = "marked_done" if new_status == "done" else "marked_pending"
     response: dict[str, Any] = {
         "success": len(errors) == 0,
-        key: marked,
+        "marked": marked,
         "marked_count": len(marked),
+        "new_status": new_status,
         "todos": _sorted_todos(agent_id),
         "total_count": len(agent_todos),
     }
@@ -617,89 +545,48 @@ def _mark(
 
 
 @function_tool(timeout=30)
-async def mark_todo_done(
-    ctx: RunContextWrapper,
-    todo_id: str | None = None,
-    todo_ids: str | None = None,
-) -> str:
+async def mark_todo_done(ctx: RunContextWrapper, todo_ids: str) -> str:
     """Mark one or many todos as done.
 
-    Pass either ``todo_id`` (single) or ``todo_ids`` (bulk), not both.
+    Always pass a list, even for a single ID (wrap it in a one-item array).
 
     Args:
-        todo_id: Single todo's ID.
-        todo_ids: Bulk form — JSON array, comma-separated string, or
-            single ID.
+        todo_ids: JSON array of todo IDs to mark done. For one todo,
+            pass a one-item list.
     """
-    return _mark(
-        agent_id=_agent_id_from(ctx),
-        todo_id=todo_id,
-        todo_ids=todo_ids,
-        new_status="done",
-    )
+    return _mark(agent_id=_agent_id_from(ctx), todo_ids=todo_ids, new_status="done")
 
 
 @function_tool(timeout=30)
-async def mark_todo_pending(
-    ctx: RunContextWrapper,
-    todo_id: str | None = None,
-    todo_ids: str | None = None,
-) -> str:
+async def mark_todo_pending(ctx: RunContextWrapper, todo_ids: str) -> str:
     """Reset one or many todos to pending (e.g., to retry a failed task).
 
-    Pass either ``todo_id`` (single) or ``todo_ids`` (bulk), not both.
+    Always pass a list, even for a single ID (wrap it in a one-item array).
 
     Args:
-        todo_id: Single todo's ID.
-        todo_ids: Bulk form — JSON array, comma-separated, or single ID.
+        todo_ids: JSON array of todo IDs to reset to pending. For one
+            todo, pass a one-item list.
     """
-    return _mark(
-        agent_id=_agent_id_from(ctx),
-        todo_id=todo_id,
-        todo_ids=todo_ids,
-        new_status="pending",
-    )
+    return _mark(agent_id=_agent_id_from(ctx), todo_ids=todo_ids, new_status="pending")
 
 
 @function_tool(timeout=30)
-async def delete_todo(
-    ctx: RunContextWrapper,
-    todo_id: str | None = None,
-    todo_ids: str | None = None,
-) -> str:
+async def delete_todo(ctx: RunContextWrapper, todo_ids: str) -> str:
     """Delete one or many todos. Removes them entirely (no soft-delete).
 
-    Pass either ``todo_id`` (single) or ``todo_ids`` (bulk), not both.
+    Always pass a list, even for a single ID (wrap it in a one-item array).
 
     Args:
-        todo_id: Single todo's ID.
-        todo_ids: Bulk form — JSON array, comma-separated, or single ID.
+        todo_ids: JSON array of todo IDs to delete. For one todo, pass
+            a one-item list.
     """
     agent_id = _agent_id_from(ctx)
     try:
         agent_todos = _get_agent_todos(agent_id)
-        single_mode = todo_id is not None and str(todo_id).strip() != ""
-        bulk_mode = todo_ids is not None and str(todo_ids).strip() != ""
-        if single_mode and bulk_mode:
-            return json.dumps(
-                {
-                    "success": False,
-                    "error": (
-                        "Pass either `todo_id` (single) or `todo_ids` (bulk), not both. "
-                        "To batch, use `todo_ids` only."
-                    ),
-                },
-                ensure_ascii=False,
-                default=str,
-            )
-        ids: list[str] = []
-        if bulk_mode:
-            ids.extend(_normalize_todo_ids(todo_ids))
-        elif todo_id is not None and str(todo_id).strip():
-            ids.append(todo_id)
+        ids = _normalize_todo_ids(todo_ids)
         if not ids:
             return json.dumps(
-                {"success": False, "error": "Provide todo_id or todo_ids to delete."},
+                {"success": False, "error": "Provide a non-empty 'todo_ids' list to delete."},
                 ensure_ascii=False,
                 default=str,
             )
