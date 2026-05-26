@@ -42,12 +42,6 @@ logger = logging.getLogger(__name__)
 
 
 class StrixDockerSandboxClient(DockerSandboxClient):
-    """``DockerSandboxClient`` subclass that injects Strix-required capabilities.
-
-    Only ``_create_container`` is overridden. All other behavior — image
-    management, session lifecycle, port resolution, cleanup — is inherited.
-    """
-
     async def _create_container(
         self,
         image: str,
@@ -104,7 +98,7 @@ class StrixDockerSandboxClient(DockerSandboxClient):
 
         # Strix injections — append, don't overwrite, so FUSE/SYS_ADMIN survives.
         cap_add = create_kwargs.setdefault("cap_add", [])
-        if not isinstance(cap_add, list):  # defensive — parent always sets list
+        if not isinstance(cap_add, list):
             cap_add = list(cap_add)
             create_kwargs["cap_add"] = cap_add
         for cap in ("NET_ADMIN", "NET_RAW"):

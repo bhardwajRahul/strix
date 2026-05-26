@@ -1,9 +1,4 @@
-"""Top-level Strix scan runner.
-
-The SDK owns model/tool execution and per-agent sessions. This module owns
-Strix-specific scan setup, child-agent startup, resume, and the small wake loop
-needed to keep every agent addressable after its SDK run parks.
-"""
+"""Top-level Strix scan runner."""
 
 from __future__ import annotations
 
@@ -72,8 +67,6 @@ async def run_strix_scan(
     if scan_id is None:
         scan_id = f"scan-{uuid.uuid4().hex[:8]}"
 
-    # Resolve run_dir before any heavy bring-up so the log file captures
-    # everything from sandbox start onwards.
     run_dir = run_dir_for(scan_id)
     run_dir.mkdir(parents=True, exist_ok=True)
     state_dir = runtime_state_dir(run_dir)
@@ -105,15 +98,10 @@ async def run_strix_scan(
     logger.info("LLM model resolved: %s", resolved_model)
     chat_completions_tools = uses_chat_completions_tool_schema(resolved_model, settings)
 
-    # Caller may pre-create the coordinator so it can route stop/chat
-    # commands while the scan loop runs in another thread.
     if coordinator is None:
         coordinator = AgentCoordinator()
     coordinator.set_snapshot_path(agents_path)
 
-    # Wire the per-agent todo store to ``{run_dir}/.state/todos.json`` (mirrored
-    # on every CRUD) and reload any prior todos so respawned subagents
-    # find their lists intact. Same for the shared notes store.
     from strix.tools.notes.tools import hydrate_notes_from_disk
     from strix.tools.todo.tools import hydrate_todos_from_disk
 
@@ -228,8 +216,6 @@ async def run_strix_scan(
             "spawn_child_agent": spawn_child_agent,
         }
 
-        # All agents share one SQLite database; SDK session_id separates
-        # each agent's conversation inside that database.
         root_session = open_agent_session(root_id, agents_db)
         sessions_to_close.append(root_session)
         await coordinator.attach_runtime(root_id, session=root_session)
@@ -291,16 +277,8 @@ async def run_strix_scan(
         )
     except BaseException:
         logger.exception("Strix scan %s failed", scan_id)
-        # Cancel any descendant tasks the root spawned before unwinding.
-        # cancel_descendants is idempotent and handles the empty-tree case.
         if root_id is not None:
             await coordinator.cancel_descendants(root_id)
-            # The SDK's on_agent_end hook only fires after a successful
-            # ``Runner.run_streamed`` reaches the agent's first turn. A
-            # failure earlier (e.g., model-provider routing, sandbox
-            # bring-up) leaves the root stuck at status="running" — the
-            # TUI keeps animating "Initializing" forever. Finalize it
-            # here so the coordinator reflects reality.
             with contextlib.suppress(Exception):
                 await coordinator.set_status(root_id, "failed")
         raise

@@ -298,10 +298,6 @@ async def _do_create(  # noqa: PLR0912
         }
 
 
-# Generous timeout: the dedup check makes a separate LLM call, and
-# large scans can have many existing reports to compare against.
-# strict_mode=False because cvss_breakdown is a dict[str, str] and
-# code_locations is list[dict] — both free-form for the strict schema.
 @function_tool(timeout=180, strict_mode=False)
 async def create_vulnerability_report(
     ctx: RunContextWrapper,

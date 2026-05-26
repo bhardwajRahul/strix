@@ -189,10 +189,7 @@ async def respawn_subagents(
     event_sink: StreamEventSink | None = None,
     hooks: RunHooks[dict[str, Any]] | None = None,
 ) -> None:
-    """Re-spawn subagent runners from a restored coordinator snapshot."""
     async with coordinator._lock:
-        # Snapshot the iteration view first so we can mutate via coordinator
-        # below without "dict changed during iteration" trouble.
         agents_snapshot = [
             (aid, status, dict(coordinator.metadata.get(aid, {})))
             for aid, status in coordinator.statuses.items()

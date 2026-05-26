@@ -5,10 +5,6 @@ The Caido CLI runs as an in-container sidecar listening on
 ``session.exec()``-ing curl from inside the container, then construct
 a host-side :class:`caido_sdk_client.Client` against the runtime's
 exposed-port URL for all subsequent SDK calls.
-
-Running the auth dance through ``session.exec`` keeps this module
-runtime-agnostic — Docker / Daytona / K8s sessions all implement
-``exec`` even when their port-exposure semantics differ.
 """
 
 from __future__ import annotations
@@ -89,22 +85,7 @@ async def bootstrap_caido(
     host_url: str,
     container_url: str,
 ) -> Client:
-    """Connect to the in-container Caido sidecar and select a fresh project.
-
-    Args:
-        session: Bound sandbox session — used for ``exec`` to call into
-            the in-container Caido API for the guest-login dance.
-        host_url: Host-reachable URL for Caido's GraphQL endpoint
-            (e.g. ``http://127.0.0.1:{exposed_port}``). Used by the
-            host-side :class:`Client` for all post-bootstrap calls.
-        container_url: In-container URL for Caido's GraphQL endpoint
-            (e.g. ``http://127.0.0.1:48080``). Used by the in-sandbox
-            curl for the guest-login dance.
-
-    Returns:
-        A connected :class:`caido_sdk_client.Client` with a temporary
-        ``"sandbox"`` project selected.
-    """
+    """Connect to the in-container Caido sidecar and select a fresh project."""
     logger.info("Bootstrapping Caido client (host=%s, container=%s)", host_url, container_url)
 
     access_token = await _login_as_guest(session, container_url=container_url)

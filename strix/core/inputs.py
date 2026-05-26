@@ -15,12 +15,10 @@ if TYPE_CHECKING:
     from strix.config.settings import ReasoningEffort
 
 
-# Default max_turns budget passed to the SDK runner.
 DEFAULT_MAX_TURNS = 500
 
 
 def build_root_task(scan_config: dict[str, Any]) -> str:
-    """Format the user-facing task for the root agent."""
     targets = scan_config.get("targets", []) or []
     diff_scope = scan_config.get("diff_scope") or {}
     user_instructions = scan_config.get("user_instructions", "") or ""
@@ -81,7 +79,6 @@ def build_root_task(scan_config: dict[str, Any]) -> str:
 
 
 def build_scope_context(scan_config: dict[str, Any]) -> dict[str, Any]:
-    """Build the system_prompt_context block consumed by the prompt template."""
     authorized: list[dict[str, str]] = []
     value_keys = {
         "repository": "target_repo",

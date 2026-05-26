@@ -1,18 +1,4 @@
-"""Sandbox backend registry — runtime-agnostic session bring-up.
-
-A *backend* is an async callable that takes an image tag + an SDK
-:class:`Manifest` + the ports to expose, and returns the matching
-``(client, session)`` pair. The caller owns lifecycle from there
-(``await client.delete(session)``).
-
-This keeps :mod:`strix.runtime.session_manager` free of any
-backend-specific imports — switching to Daytona / K8s / Modal /
-whatever is one new factory function plus one registry entry.
-
-Selection is driven by ``STRIX_RUNTIME_BACKEND`` (default: ``"docker"``).
-Unknown values raise :class:`ValueError` rather than silently falling
-back, so typos fail loudly.
-"""
+"""Sandbox backend registry — selected via STRIX_RUNTIME_BACKEND (default: docker)."""
 
 from __future__ import annotations
 
@@ -28,11 +14,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-# A backend brings up a fresh session and returns the (client, session)
-# pair. The client is whatever object exposes ``await client.delete(session)``
-# for cleanup — typically an ``agents.sandbox.client.BaseSandboxClient``
-# subclass, but the protocol is duck-typed so non-SDK backends could
-# also plug in if they implement the same interface.
 SandboxBackend = Callable[..., Awaitable[tuple[Any, Any]]]
 
 
@@ -103,5 +84,4 @@ def register_backend(name: str, backend: SandboxBackend) -> None:
 
 
 def supported_backends() -> list[str]:
-    """Snapshot of registered backend names. Useful for ``--help`` text."""
     return sorted(_BACKENDS)

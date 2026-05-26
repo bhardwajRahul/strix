@@ -262,8 +262,6 @@ class StopAgentScreen(ModalScreen):  # type: ignore[misc]
 
 
 class VulnerabilityDetailScreen(ModalScreen):  # type: ignore[misc]
-    """Modal screen to display vulnerability details."""
-
     SEVERITY_COLORS: ClassVar[dict[str, str]] = {
         "critical": "#dc2626",  # Red
         "high": "#ea580c",  # Orange
@@ -390,7 +388,6 @@ class VulnerabilityDetailScreen(ModalScreen):  # type: ignore[misc]
             text.append("CVE: ", style=self.FIELD_STYLE)
             text.append(cve)
 
-        # CVSS breakdown
         cvss_breakdown = vuln.get("cvss_breakdown", {})
         if cvss_breakdown:
             cvss_parts = []
@@ -464,12 +461,10 @@ class VulnerabilityDetailScreen(ModalScreen):  # type: ignore[misc]
         vuln = self.vulnerability
         lines: list[str] = []
 
-        # Title
         title = vuln.get("title", "Untitled Vulnerability")
         lines.append(f"# {title}")
         lines.append("")
 
-        # Metadata
         if vuln.get("id"):
             lines.append(f"**ID:** {vuln['id']}")
         if vuln.get("severity"):
@@ -489,7 +484,6 @@ class VulnerabilityDetailScreen(ModalScreen):  # type: ignore[misc]
         if vuln.get("cvss") is not None:
             lines.append(f"**CVSS:** {vuln['cvss']}")
 
-        # CVSS Vector
         cvss_breakdown = vuln.get("cvss_breakdown", {})
         if cvss_breakdown:
             abbrevs = {
@@ -508,21 +502,17 @@ class VulnerabilityDetailScreen(ModalScreen):  # type: ignore[misc]
             if parts:
                 lines.append(f"**CVSS Vector:** {'/'.join(parts)}")
 
-        # Description
         lines.append("")
         lines.append("## Description")
         lines.append("")
         lines.append(vuln.get("description") or "No description provided.")
 
-        # Impact
         if vuln.get("impact"):
             lines.extend(["", "## Impact", "", vuln["impact"]])
 
-        # Technical Analysis
         if vuln.get("technical_analysis"):
             lines.extend(["", "## Technical Analysis", "", vuln["technical_analysis"]])
 
-        # Proof of Concept
         if vuln.get("poc_description") or vuln.get("poc_script_code"):
             lines.extend(["", "## Proof of Concept", ""])
             if vuln.get("poc_description"):
@@ -533,7 +523,6 @@ class VulnerabilityDetailScreen(ModalScreen):  # type: ignore[misc]
                 lines.append(vuln["poc_script_code"])
                 lines.append("```")
 
-        # Code Analysis
         if vuln.get("code_locations"):
             lines.extend(["", "## Code Analysis", ""])
             for i, loc in enumerate(vuln["code_locations"]):
@@ -559,7 +548,6 @@ class VulnerabilityDetailScreen(ModalScreen):  # type: ignore[misc]
                     lines.append("```")
                 lines.append("")
 
-        # Remediation
         if vuln.get("remediation_steps"):
             lines.extend(["", "## Remediation", "", vuln["remediation_steps"]])
 
@@ -584,8 +572,6 @@ class VulnerabilityDetailScreen(ModalScreen):  # type: ignore[misc]
 
 
 class VulnerabilityItem(Static):  # type: ignore[misc]
-    """A clickable vulnerability item."""
-
     def __init__(self, label: Text, vuln_data: dict[str, Any], **kwargs: Any) -> None:
         super().__init__(label, **kwargs)
         self.vuln_data = vuln_data
@@ -596,8 +582,6 @@ class VulnerabilityItem(Static):  # type: ignore[misc]
 
 
 class VulnerabilitiesPanel(VerticalScroll):  # type: ignore[misc]
-    """A scrollable panel showing found vulnerabilities with severity-colored dots."""
-
     SEVERITY_COLORS: ClassVar[dict[str, str]] = {
         "critical": "#dc2626",  # Red
         "high": "#ea580c",  # Orange
@@ -716,8 +700,6 @@ class StrixTUIApp(App):  # type: ignore[misc]
         self.live_view.hydrate_from_run_dir(self.report_state.get_run_dir())
         self._agent_graph_sync_future: Any | None = None
 
-        # Pre-create the coordinator here so the TUI can route stop/chat
-        # commands while the scan loop runs in a worker thread.
         from strix.core.agents import AgentCoordinator
 
         self.coordinator = AgentCoordinator()
@@ -731,13 +713,10 @@ class StrixTUIApp(App):  # type: ignore[misc]
         self._scan_loop: asyncio.AbstractEventLoop | None = None
         self._scan_stop_event = threading.Event()
         self._scan_completed = threading.Event()
-        # Captured by ``scan_target`` when the scan thread crashes; read
-        # by ``run_tui`` after ``run_async()`` returns so the user sees
-        # the traceback on stderr instead of just a silent UI hang.
         self._scan_error: BaseException | None = None
 
-        self._spinner_frame_index: int = 0  # Current animation frame index
-        self._sweep_num_squares: int = 6  # Number of squares in sweep animation
+        self._spinner_frame_index: int = 0
+        self._sweep_num_squares: int = 6
         self._sweep_colors: list[str] = [
             "#000000",  # Dimmest (shows dot)
             "#031a09",
@@ -764,8 +743,6 @@ class StrixTUIApp(App):  # type: ignore[misc]
             "local_sources": getattr(args, "local_sources", None) or [],
             "scope_mode": getattr(args, "scope_mode", "auto"),
             "diff_base": getattr(args, "diff_base", None),
-            # Forward the new --instruction (if any) so the resume path
-            # can deliver it as a fresh user message after session replay.
             "resume_instruction": getattr(args, "user_explicit_instruction", None) or "",
         }
 
@@ -1378,9 +1355,6 @@ class StrixTUIApp(App):  # type: ignore[misc]
             try:
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
-                # Stash the loop so synchronous TUI handlers (stop /
-                # chat) can submit coordinator coroutines onto it from the
-                # main thread.
                 self._scan_loop = loop
 
                 try:
@@ -1410,8 +1384,6 @@ class StrixTUIApp(App):  # type: ignore[misc]
                     logging.exception("Unexpected error during scan")
                     self._scan_error = e
                 finally:
-                    # Best-effort sandbox teardown if early setup failed
-                    # before run_strix_scan's own ``finally`` ran.
                     with contextlib.suppress(Exception):
                         loop.run_until_complete(
                             session_manager.cleanup(self.scan_config["run_name"]),
@@ -1722,11 +1694,6 @@ class StrixTUIApp(App):  # type: ignore[misc]
         return agent_name, False
 
     def action_confirm_stop_agent(self, agent_id: str) -> None:
-        # Graceful stop: each agent's current turn finishes (and is saved to
-        # session) before the run loop honors the cancel. The interactive
-        # outer loop parks with status="stopped".
-        # The hard ``cancel_descendants`` path remains for KeyboardInterrupt
-        # in entry.py where graceful isn't possible.
         if self._scan_loop is None or self._scan_loop.is_closed():
             logger.warning("No active scan loop; cannot stop agent %s", agent_id)
             return
@@ -1869,12 +1836,7 @@ class StrixTUIApp(App):  # type: ignore[misc]
 
 
 async def run_tui(args: argparse.Namespace) -> None:
-    """Run strix in interactive TUI mode with textual."""
     app = StrixTUIApp(args)
     await app.run_async()
-    # Propagate scan-thread failures: ``app.run_async`` returns normally
-    # when the user quits (ctrl-q) regardless of whether the scan
-    # crashed. Without this re-raise, ``main.py`` would treat a failed
-    # scan as success and print the completion banner.
     if app._scan_error is not None:
         raise app._scan_error

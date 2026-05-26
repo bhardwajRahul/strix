@@ -1,15 +1,4 @@
-"""Multi-agent graph tools backed by the SDK-native :class:`AgentCoordinator`.
-
-- ``view_agent_graph``: render the parent/child tree.
-- ``send_message_to_agent``: append a message to another agent's SDK session.
-- ``wait_for_message``: pause this agent until a message arrives or
-  ``timeout_seconds`` elapses.
-- ``create_agent``: asks the scan runner to spawn an addressable child.
-- ``stop_agent``: cancel a running agent (optionally cascading to its
-  descendants).
-- ``agent_finish``: subagents only — posts a structured completion
-  report to the parent's SDK session and returns a final-output marker.
-"""
+"""Multi-agent graph tools backed by AgentCoordinator."""
 
 from __future__ import annotations
 
@@ -27,9 +16,6 @@ from strix.core.agents import Status, coordinator_from_context
 from strix.skills import validate_requested_skills
 
 
-# An agent is "active" when stop_agent can meaningfully act on it. Anything
-# else (completed / stopped / crashed / failed) is terminal — request_stop
-# would forcibly overwrite that status, erasing the original outcome.
 _ACTIVE_STATUSES: frozenset[str] = frozenset({"running", "waiting"})
 
 
@@ -117,9 +103,6 @@ async def view_agent_graph(ctx: RunContextWrapper) -> str:
     for root in roots:
         render(root, 0)
 
-    # Derive per-status counts from the canonical ``Status`` literal so a
-    # new status added in core.agents auto-flows into this summary without
-    # the buckets silently going out of sync with the source of truth.
     counts = Counter(statuses.values())
     summary: dict[str, int] = {"total": len(parent_of)}
     for status_name in get_args(Status):
@@ -445,8 +428,6 @@ async def create_agent(
             default=str,
         )
 
-    # ``ctx.turn_input`` carries the parent's full conversation up to and
-    # including the call that's currently invoking ``create_agent``.
     parent_history = list(ctx.turn_input) if inherit_context and ctx.turn_input else []
     try:
         result = await spawner(

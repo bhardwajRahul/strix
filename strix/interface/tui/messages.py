@@ -18,7 +18,6 @@ def send_user_message_to_agent(
     target_agent_id: str,
     message: str,
 ) -> bool:
-    """Record a local user message and enqueue it into the target SDK session."""
     if loop is None or loop.is_closed():
         return False
 

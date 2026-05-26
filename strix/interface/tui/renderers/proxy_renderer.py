@@ -17,7 +17,6 @@ def _truncate(text: str, max_len: int = 80) -> str:
 
 
 def _sanitize(text: str, max_len: int = 150) -> str:
-    """Remove newlines and truncate text."""
     clean = text.replace("\n", " ").replace("\r", "").replace("\t", " ")
     return _truncate(clean, max_len)
 

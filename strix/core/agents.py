@@ -1,10 +1,4 @@
-"""SDK-native state for Strix's addressable agent graph.
-
-The Agents SDK owns model/tool execution and per-agent conversation
-history. Strix owns only product semantics the SDK does not provide:
-agent ids, the parent/child graph, wake/stop signals, TUI-visible
-status, and process-resume metadata.
-"""
+"""SDK-native state for Strix's addressable agent graph."""
 
 from __future__ import annotations
 

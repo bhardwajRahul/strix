@@ -1,20 +1,4 @@
-"""``build_strix_agent`` — assemble an ``agents.Agent`` for root or child.
-
-Wires the SDK function tools, multi-agent graph tools, and the rendered
-Jinja prompt into one ``agents.Agent`` ready for ``Runner.run``.
-
-Two flavors:
-
-- **Root** (``is_root=True``): top-level scan agent. Carries
-  ``finish_scan`` and stops after that tool reports ``scan_completed``.
-- **Child** (``is_root=False``): subagents spawned by the
-  ``create_agent`` graph tool. Carries ``agent_finish`` and stops
-  after that tool reports ``agent_completed``.
-
-Skills are baked into the system prompt at scan bring-up. The
-``load_skill`` tool is also available for on-demand inline reference
-to any skill the agent didn't preload.
-"""
+"""Build SandboxAgents for root + child Strix runs."""
 
 from __future__ import annotations
 
@@ -138,8 +122,6 @@ def _function_tool_with_error_result(tool: FunctionTool) -> FunctionTool:
 
 
 def _custom_tool_as_function_tool(tool: CustomTool) -> FunctionTool:
-    """Expose an SDK raw-input custom tool through Chat-Completions function calling."""
-
     async def invoke(ctx: Any, raw_input: str) -> Any:
         custom_input = _extract_custom_input(tool, raw_input)
         if not custom_input:
@@ -337,42 +319,28 @@ def _finish_tool_use_behavior(
     return ToolsToFinalOutputResult(is_final_output=False, final_output=None)
 
 
-# Host-side Strix tools. Sandbox shell + filesystem are added per-run
-# by the SDK via the ``Shell`` and ``Filesystem`` capabilities below
-# (they bind to the live sandbox session and emit ``exec_command`` /
-# ``write_stdin`` / ``apply_patch`` / ``view_image`` function tools).
 _BASE_TOOLS: tuple[Tool, ...] = (
-    # Thinking + planning
     think,
-    # On-demand skill reference (returns the skill markdown inline)
     load_skill,
-    # Per-agent todos
     create_todo,
     list_todos,
     update_todo,
     mark_todo_done,
     mark_todo_pending,
     delete_todo,
-    # Shared notes (per-run JSONL store)
     create_note,
     list_notes,
     get_note,
     update_note,
     delete_note,
-    # Web search (only registered if PERPLEXITY_API_KEY is set; the
-    # tool itself returns a structured error when not configured, so
-    # always exposing it is safe)
     web_search,
-    # Reporting
     create_vulnerability_report,
-    # Caido HTTP/HTTPS proxy
     list_requests,
     view_request,
     repeat_request,
     list_sitemap,
     view_sitemap_entry,
     scope_rules,
-    # Multi-agent graph tools (the coordinator is in ctx.context)
     view_agent_graph,
     send_message_to_agent,
     wait_for_message,
@@ -392,35 +360,11 @@ def build_strix_agent(
     chat_completions_tools: bool = False,
     system_prompt_context: dict[str, Any] | None = None,
 ) -> SandboxAgent[Any]:
-    """Build a ``SandboxAgent`` configured for either root or child use.
-
-    The ``Shell`` and ``Filesystem`` capabilities are added unbound; the
-    SDK's runtime binds them per-run against the live sandbox session
-    set on ``RunConfig.sandbox`` and merges their tools (``exec_command``,
-    ``write_stdin``, ``apply_patch``, ``view_image``) into the agent's
-    final tool list. We deliberately exclude ``Compaction`` (OpenAI
-    Responses API only).
+    """Build a SandboxAgent for either root or child use.
 
     Args:
-        name: Agent name. Surfaces in traces and the coordinator's ``names`` map.
-            Defaults to ``"strix"`` for the root; create_agent passes
-            distinct names per child.
-        skills: Skills to preload into the system prompt.
-        is_root: Selects the tool list and ``tool_use_behavior``.
-            Root carries ``finish_scan`` and child carries ``agent_finish``;
-            the run only stops when the lifecycle tool result succeeds.
-        scan_mode: ``"deep"`` etc.; routes the scan-mode skill section
-            of the prompt template.
-        is_whitebox: Whitebox source-aware mode toggle. Adds two extra
-            skills to the prompt and gates whitebox-only behavior in
-            the create_agent / wiki integration.
-        interactive: Renders the interactive-mode communication block
-            in the system prompt.
         chat_completions_tools: Wrap SDK custom tools as function tools
             when the selected backend cannot accept Responses custom tools.
-        system_prompt_context: Free-form dict the prompt template
-            renders into the ``system_prompt_context`` variable —
-            today carries the scan scope / authorization block.
     """
     instructions = render_system_prompt(
         skills=skills,
@@ -451,13 +395,7 @@ def build_strix_agent(
         instructions=instructions,
         tools=tools,
         tool_use_behavior=_finish_tool_use_behavior,
-        # Non-interactive runs must keep forcing tool calls until the
-        # lifecycle tool completes. Interactive runs need the SDK default
-        # reset so a tool-assisted answer can end as plain text instead of
-        # looping through think/list_todos forever.
         reset_tool_choice=interactive,
-        # model=None so ``RunConfig.model`` drives provider selection
-        # through the SDK's default MultiProvider.
         model=None,
         capabilities=[
             Filesystem(

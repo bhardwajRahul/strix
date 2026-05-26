@@ -55,7 +55,6 @@ _REQ_FIELD_MAP: dict[SortBy, tuple[str, str]] = {
 
 
 def caido_url() -> str:
-    """Return the in-sandbox Caido endpoint used by ``caido_api``."""
     return os.environ.get("STRIX_CAIDO_URL", _DEFAULT_CAIDO_URL).rstrip("/")
 
 
@@ -83,7 +82,6 @@ def _login_as_guest() -> str:
 
 
 async def get_client() -> Client:
-    """Return a connected Caido SDK client for the local sandbox sidecar."""
     if client := _CLIENT_CACHE.get("default"):
         return client
 
@@ -95,7 +93,6 @@ async def get_client() -> Client:
 
 
 async def close_client() -> None:
-    """Close the cached sandbox Caido client, if one was opened."""
     client = _CLIENT_CACHE.pop("default", None)
     if client is None:
         return
@@ -169,10 +166,6 @@ def build_raw_request(
     return ConnectionInfoInput(host=host, port=port, is_tls=is_tls), raw
 
 
-# Cap inline response bodies returned through tool results so a single
-# large response (HTML pages, JSON dumps) can't blow out the model's
-# context. The model can re-fetch the full body via ``view_request``
-# using the captured request id from ``list_requests`` if it needs more.
 _RESPONSE_BODY_MAX_CHARS = 8192
 
 
@@ -286,12 +279,6 @@ def apply_modifications(
     }
 
 
-# Hard wall-clock bound on a single replay dispatch. Caido's Replay
-# API has no built-in send-side timeout, so a stalled connection
-# (unroutable target, slow loopback, etc.) hangs the caller until the
-# function_tool wrapper's 120s budget expires — by which point we've
-# lost any useful error context. 30s is generous for legitimate HTTP
-# and short enough that the model can decide to retry rather than wait.
 _REPLAY_SEND_TIMEOUT_SECONDS = 30.0
 
 
@@ -332,10 +319,6 @@ async def replay_send_raw(
             "response_raw": None,
         }
     elapsed_ms = int((time.time() - started) * 1000)
-    # ``result.entry.response`` is the parsed Response (with ``.raw`` bytes
-    # when ``includeResponseRaw`` was True, which is the entries SDK's
-    # default). The previous ``result.entry.response_raw`` lookup matched
-    # no attribute on ReplayEntry and silently returned ``None``.
     response = getattr(result.entry, "response", None)
     response_raw = getattr(response, "raw", None) if response is not None else None
     return {
@@ -402,7 +385,6 @@ async def list_requests(
     sort_order: SortOrder = "desc",
     scope_id: str | None = None,
 ) -> Any:
-    """List captured HTTP requests from sandbox Python."""
     return await list_requests_with_client(
         await get_client(),
         httpql_filter=httpql_filter,
@@ -415,7 +397,6 @@ async def list_requests(
 
 
 async def view_request(request_id: str, *, part: RequestPart = "request") -> Any:
-    """Return one captured request/response from sandbox Python."""
     return await get_request_with_client(await get_client(), request_id, part=part)
 
 
@@ -424,7 +405,6 @@ async def repeat_request(
     *,
     modifications: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Replay a captured request after applying request modifications."""
     mods = modifications or {}
     result = await get_request_with_client(await get_client(), request_id, part="request")
     if result is None or result.request.raw is None:
@@ -452,7 +432,6 @@ async def scope_rules(
     scope_id: str | None = None,
     scope_name: str | None = None,
 ) -> Any:
-    """Manage Caido scope rules from sandbox Python."""
     client = await get_client()
     if action == "list":
         result = await scope_list(client)
@@ -569,9 +548,6 @@ def _clean_sitemap_response(resp: dict[str, Any]) -> dict[str, Any]:
         out["status_code"] = resp["statusCode"]
     if resp.get("length"):
         out["length"] = resp["length"]
-    # Suppress 0 the same way list_requests does — Caido leaves it unset
-    # on a lot of proxy-captured traffic and a misleading "0ms" is worse
-    # than the field simply being absent.
     if resp.get("roundtripTime"):
         out["roundtrip_ms"] = resp["roundtripTime"]
     return out
@@ -586,13 +562,11 @@ async def list_sitemap_with_client(
     page: int = 1,
     page_size: int = _SITEMAP_PAGE_SIZE,
 ) -> dict[str, Any]:
-    """Browse Caido's discovered sitemap. Mirrors main-branch shape.
+    """Browse Caido's discovered sitemap.
 
     The Caido GraphQL ``sitemap*Entries`` operations don't support native
     pagination, so we fetch all edges for the requested level and slice
-    client-side. That's fine for typical surface sizes; for very large
-    sitemaps the caller can drill into ``parent_id`` instead of paging
-    the root list.
+    client-side.
     """
     if parent_id:
         raw = await client.graphql.query(
@@ -636,7 +610,6 @@ async def view_sitemap_entry_with_client(
     client: CaidoClient,
     entry_id: str,
 ) -> dict[str, Any]:
-    """Fetch one sitemap entry plus its recent related requests."""
     raw = await client.graphql.query(_SITEMAP_ENTRY_QUERY, variables={"id": entry_id})
     entry = raw.get("sitemapEntry")
     if not entry:
@@ -678,7 +651,6 @@ async def list_sitemap(
     page: int = 1,
     page_size: int = _SITEMAP_PAGE_SIZE,
 ) -> dict[str, Any]:
-    """Sandbox-Python entry point for sitemap browsing."""
     return await list_sitemap_with_client(
         await get_client(),
         scope_id=scope_id,
@@ -690,7 +662,6 @@ async def list_sitemap(
 
 
 async def view_sitemap_entry(entry_id: str) -> dict[str, Any]:
-    """Sandbox-Python entry point for sitemap entry detail."""
     return await view_sitemap_entry_with_client(await get_client(), entry_id)
 
 

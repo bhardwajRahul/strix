@@ -15,8 +15,6 @@ from strix.interface.tui.history import load_session_history
 
 
 class TuiLiveView:
-    """UI projection of agent state plus SDK stream/session events."""
-
     def __init__(self) -> None:
         self.agents: dict[str, dict[str, Any]] = {}
         self.events: list[dict[str, Any]] = []

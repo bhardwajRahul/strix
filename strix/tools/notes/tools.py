@@ -1,12 +1,4 @@
-"""Per-run notes (shared across agents).
-
-Module-level dict shared across every agent in the same scan process.
-Mirrored to ``{state_dir}/notes.json`` after every CRUD via :func:`_persist`
-so a process restart can :func:`hydrate_notes_from_disk` and the resumed
-scan picks up exactly where it left off. Concurrent writers are
-serialised by ``_notes_lock`` since each tool entry-point dispatches
-the impl onto a worker thread via ``asyncio.to_thread``.
-"""
+"""Per-run notes storage — mirrored to {state_dir}/notes.json."""
 
 from __future__ import annotations
 
@@ -31,20 +23,10 @@ _VALID_NOTE_CATEGORIES = ["general", "findings", "methodology", "questions", "pl
 _notes_lock = threading.RLock()
 _DEFAULT_CONTENT_PREVIEW_CHARS = 280
 
-# On-disk mirror path. Set by :func:`hydrate_notes_from_disk` once per
-# scan; unset means "no persistence" (e.g. unit tests). All writes go
-# through :func:`_persist`, which is a no-op until the path is set.
 _notes_path: Path | None = None
 
 
 def hydrate_notes_from_disk(state_dir: Path) -> None:
-    """Wire the on-disk mirror at ``{state_dir}/notes.json`` and reload it.
-
-    Called by :func:`run_strix_scan` once at scan setup. Subsequent CRUD
-    calls auto-persist after every mutation. Idempotent on missing file.
-    Tolerant of corruption — logs and starts empty rather than failing
-    the scan over a broken sidecar artifact.
-    """
     global _notes_path  # noqa: PLW0603
     _notes_path = state_dir / "notes.json"
     with _notes_lock:
@@ -76,11 +58,6 @@ def hydrate_notes_from_disk(state_dir: Path) -> None:
 
 
 def _persist() -> None:
-    """Atomic-rename mirror of ``_notes_storage`` → ``{state_dir}/notes.json``.
-
-    No-op when ``_notes_path`` isn't wired (tests). Errors are logged
-    and swallowed — a disk hiccup must never tear down the agent's call.
-    """
     path = _notes_path
     if path is None:
         return
@@ -298,9 +275,6 @@ def _delete_note_impl(note_id: str) -> dict[str, Any]:
                 "message": f"Note '{note_title}' deleted successfully",
                 "total_count": len(_notes_storage),
             }
-
-
-# --- public tools ---------------------------------------------------------
 
 
 @function_tool(timeout=30)

@@ -1,16 +1,4 @@
-"""Caido proxy tools — host-side ``@function_tool`` wrappers.
-
-The four tools delegate to :mod:`strix.tools.proxy.caido_api` for the actual
-caido-sdk-client work and add LLM-friendly JSON serialization + error
-wrapping on top. The delegated ``caido_api.py`` module is also copied into
-the sandbox image as the importable ``caido_api`` Python module.
-
-Tools: ``list_requests``, ``view_request``, ``repeat_request``,
-``scope_rules``. Arbitrary one-off requests should be made through
-``exec_command`` (e.g. ``curl``) — they're captured automatically via
-the sandbox's ``HTTP_PROXY`` env, so wrapping them in a Strix tool only
-adds an extra layer of indirection.
-"""
+"""Caido proxy host-side @function_tool wrappers around caido_api.py."""
 
 from __future__ import annotations
 
@@ -40,10 +28,6 @@ if TYPE_CHECKING:
         SortOrder,
     )
 else:
-    # Runtime import: ``function_tool`` resolves the annotations via
-    # ``typing.get_type_hints`` so the Literal aliases must be reachable
-    # in module globals at decoration time even though they're "only"
-    # used in annotations.
     from strix.tools.proxy.caido_api import (  # noqa: TC001
         RequestPart,
         SitemapDepth,
@@ -60,8 +44,6 @@ def _ctx_client(ctx: RunContextWrapper) -> Client | None:
     return inner.get("caido_client")
 
 
-# Tool-output formatting. Caido SDK returns typed Python objects; function
-# tools need compact JSON-safe values for the model and TUI.
 def _to_tool_json(value: Any) -> Any:
     """Recursively convert SDK dataclasses/Pydantic objects to tool JSON values."""
     if value is None or isinstance(value, str | int | float | bool):
@@ -101,9 +83,6 @@ def _err(name: str, exc: Exception) -> str:
     )
 
 
-# ----------------------------------------------------------------------
-# list_requests
-# ----------------------------------------------------------------------
 @function_tool(timeout=120)
 async def list_requests(
     ctx: RunContextWrapper,
@@ -231,9 +210,6 @@ async def list_requests(
         return _err("list_requests", exc)
 
 
-# ----------------------------------------------------------------------
-# view_request
-# ----------------------------------------------------------------------
 @function_tool(timeout=60)
 async def view_request(
     ctx: RunContextWrapper,
@@ -352,9 +328,6 @@ def _format_text_page(content: str, *, page: int, page_size: int) -> dict[str, A
     }
 
 
-# ----------------------------------------------------------------------
-# repeat_request
-# ----------------------------------------------------------------------
 @function_tool(timeout=120, strict_mode=False)
 async def repeat_request(
     ctx: RunContextWrapper,
@@ -431,9 +404,6 @@ def _format_replay_tool_result(replay: dict[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=False, default=str)
 
 
-# ----------------------------------------------------------------------
-# list_sitemap
-# ----------------------------------------------------------------------
 @function_tool(timeout=60)
 async def list_sitemap(
     ctx: RunContextWrapper,
@@ -483,9 +453,6 @@ async def list_sitemap(
         return _err("list_sitemap", exc)
 
 
-# ----------------------------------------------------------------------
-# view_sitemap_entry
-# ----------------------------------------------------------------------
 @function_tool(timeout=60)
 async def view_sitemap_entry(
     ctx: RunContextWrapper,
@@ -511,9 +478,6 @@ async def view_sitemap_entry(
         return _err("view_sitemap_entry", exc)
 
 
-# ----------------------------------------------------------------------
-# scope_rules
-# ----------------------------------------------------------------------
 @function_tool(timeout=60)
 async def scope_rules(
     ctx: RunContextWrapper,
@@ -612,7 +576,6 @@ async def scope_rules(
             return json.dumps(
                 {"success": True, "scope": _to_tool_json(scope)}, ensure_ascii=False, default=str
             )
-        # action == "delete" — exhaustive Literal
         if not scope_id:
             return json.dumps(
                 {"success": False, "error": "Scope_id is required for action='delete'"},

@@ -1,10 +1,4 @@
-"""SDK model configuration helpers.
-
-This module is intentionally not a provider abstraction. Strix accepts
-friendly model names at the config boundary, normalizes them to the
-OpenAI Agents SDK's native model ids, then lets the SDK's default
-``MultiProvider`` do the actual routing.
-"""
+"""SDK model configuration helpers."""
 
 from __future__ import annotations
 
@@ -63,7 +57,7 @@ def configure_sdk_model_defaults(settings: Settings) -> None:
 
 
 def _configure_litellm_compatibility() -> None:
-    """Match the permissive LiteLLM behavior used by the pre-SDK harness."""
+    """Enable LiteLLM's permissive param-handling mode."""
     import litellm
 
     litellm.drop_params = True

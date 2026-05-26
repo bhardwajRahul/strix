@@ -1,15 +1,4 @@
-"""Per-scan logging setup.
-
-Every scan calls :func:`setup_scan_logging` to attach a ``FileHandler``
-to ``{run_dir}/strix.log`` (DEBUG, all ``strix.*`` events) plus a
-stderr handler (ERROR-only by default; DEBUG when ``STRIX_DEBUG=1``).
-``scan_id`` and ``agent_id`` are pulled from ``ContextVar``s by a
-``Filter`` so every log line is auto-tagged without callers passing
-them explicitly.
-
-Third-party loggers (``httpx``, ``litellm``, ``openai``, etc.) are
-capped at ``WARNING`` so the file isn't drowned in their internals.
-"""
+"""Per-scan logging setup."""
 
 from __future__ import annotations
 
@@ -46,8 +35,6 @@ def set_agent_id(agent_id: str | None) -> None:
 
 
 class _StrixContextFilter(logging.Filter):
-    """Inject ``scan_id`` and ``agent_id`` from ``ContextVar``s onto each record."""
-
     def filter(self, record: logging.LogRecord) -> bool:
         record.scan_id = _SCAN_ID.get() or "-"
         record.agent_id = _AGENT_ID.get() or "-"
@@ -73,12 +60,7 @@ _NOISY_LIBS: tuple[str, ...] = (
 _HANDLER_TAG = "_strix_scan_handler"
 
 
-# Logger roots that also receive our scan handlers. ``strix`` covers
-# everything we own. ``openai.agents`` is the openai-agents SDK's
-# canonical logger (verified: ``agents/logger.py``, ``agents/__init__.py``,
-# ``agents/tracing/logger.py`` all use this namespace) — without
-# attaching here, SDK-internal Runner / tool-dispatch / model-retry
-# events would be invisible.
+# ``openai.agents`` is the openai-agents SDK's canonical logger root.
 _TRACKED_ROOTS: tuple[str, ...] = ("strix", "openai.agents")
 
 
@@ -144,8 +126,6 @@ def setup_scan_logging(run_dir: Path, *, debug: bool | None = None) -> Callable[
         tracked.setLevel(logging.DEBUG)
         tracked.addHandler(file_handler)
         tracked.addHandler(stream_handler)
-        # Stop these records from also bubbling to the python root
-        # logger's lastResort handler (would double-print to stderr).
         tracked.propagate = False
 
     for name in _NOISY_LIBS:

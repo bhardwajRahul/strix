@@ -54,13 +54,6 @@ HOST_GATEWAY_HOSTNAME = "host.docker.internal"
 import logging  # noqa: E402
 
 
-# Per-scan logging is set up by ``setup_scan_logging`` from inside
-# ``core.runner.run_strix_scan`` once the scan ``run_dir`` is
-# known — that's where ``strix.*`` levels and handlers are owned. Pre-scan
-# work (``main()``, env validation, image pull) emits via the module
-# logger; once setup_scan_logging runs, those records start landing in
-# the file too.
-
 logger = logging.getLogger(__name__)
 
 
@@ -423,9 +416,6 @@ Examples:
         except Exception as e:
             parser.error(f"Failed to read instruction file '{instruction_path}': {e}")
 
-    # Capture before ``_load_resume_state`` overrides — used by the resume
-    # path in ``run_strix_scan`` to decide whether to inject the new
-    # instruction into the root's SDK session after replay.
     args.user_explicit_instruction = args.instruction if args.resume else None
 
     if args.resume:
@@ -472,7 +462,6 @@ Examples:
 
 
 def _persist_run_record(args: argparse.Namespace) -> None:
-    """Write the single public run descriptor used by resume and reporting."""
     run_dir = run_dir_for(args.run_name)
     run_dir.mkdir(parents=True, exist_ok=True)
     run_record = {
@@ -511,10 +500,6 @@ def _load_resume_state(args: argparse.Namespace, parser: argparse.ArgumentParser
     if not args.targets_info:
         parser.error(f"--resume {args.resume}: run.json has no targets_info")
 
-    # Validate any persisted ``cloned_repo_path`` still exists on disk.
-    # The resume path skips re-cloning, so a missing dir would mean the
-    # container mounts an empty source tree and agents silently scan
-    # nothing.
     for target in args.targets_info:
         if not isinstance(target, dict):
             continue
@@ -539,11 +524,6 @@ def _load_resume_state(args: argparse.Namespace, parser: argparse.ArgumentParser
         args.diff_scope = state.get("diff_scope")
     persisted_scan_mode = state.get("scan_mode")
     if persisted_scan_mode and args.scan_mode == "deep":
-        # Default scan_mode is "deep"; only override from disk if the user
-        # didn't explicitly pass a different one. (Best-effort: argparse
-        # can't tell "user passed 'deep'" from "default 'deep'"; if the
-        # persisted run was "quick" and user re-runs with an explicit
-        # ``-m deep``, we'll honor the persisted mode. Acceptable.)
         args.scan_mode = persisted_scan_mode
 
 
@@ -730,9 +710,6 @@ def main() -> None:
             else:
                 args.instruction = diff_scope.instruction_block
 
-        # Persist the fully-resolved run descriptor so a future
-        # ``--resume <run_name>`` invocation can pick up without
-        # re-supplying targets / instructions / scope.
         _persist_run_record(args)
 
     _telemetry_start_kwargs = {

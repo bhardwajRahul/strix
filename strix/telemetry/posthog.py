@@ -45,7 +45,6 @@ def _send(event: str, properties: dict[str, Any]) -> None:
         with urllib.request.urlopen(req, timeout=10):  # noqa: S310  # nosec B310
             pass
     except Exception:  # noqa: BLE001
-        # Telemetry must never disrupt a scan; log + swallow.
         logger.debug("posthog send failed for event %s", event, exc_info=True)
     else:
         logger.debug("posthog event sent: %s", event)

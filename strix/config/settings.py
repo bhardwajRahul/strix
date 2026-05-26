@@ -1,22 +1,4 @@
-"""Strix application settings — pydantic-settings powered.
-
-Three sources, env-precedence-first:
-
-1. Environment variables (``STRIX_LLM``, ``LLM_API_KEY``, etc.) — highest.
-2. ``~/.strix/cli-config.json`` (or ``--config <path>``) — middle.
-3. Field defaults — lowest.
-
-Bool fields auto-parse ``"0"``/``"false"``/``"no"``/``"off"`` as falsy
-and any other non-empty string as truthy. Int fields auto-coerce from
-string env. The ``api_base`` field walks an alias chain so users can
-point at any OpenAI-compatible endpoint via whichever env name they
-prefer (``LLM_API_BASE`` / ``OPENAI_API_BASE`` / ``OPENAI_BASE_URL`` /
-``LITELLM_BASE_URL`` / ``OLLAMA_API_BASE``).
-
-Each sub-model is a :class:`BaseSettings` so it reads env independently
-— the alternative (one mega-BaseSettings with flat fields) would lose
-the logical grouping ``s.llm.model`` / ``s.runtime.image`` / etc.
-"""
+"""Strix application settings — pydantic-settings powered."""
 
 from __future__ import annotations
 
@@ -36,8 +18,6 @@ _BASE_CONFIG = SettingsConfigDict(
 
 
 class LlmSettings(BaseSettings):
-    """LLM provider + model + per-call defaults."""
-
     model_config = _BASE_CONFIG
 
     model: str | None = Field(default=None, alias="STRIX_LLM")
@@ -60,8 +40,6 @@ class LlmSettings(BaseSettings):
 
 
 class RuntimeSettings(BaseSettings):
-    """Sandbox image + backend selector."""
-
     model_config = _BASE_CONFIG
 
     image: str = Field(
@@ -72,24 +50,18 @@ class RuntimeSettings(BaseSettings):
 
 
 class TelemetrySettings(BaseSettings):
-    """Telemetry toggle."""
-
     model_config = _BASE_CONFIG
 
     enabled: bool = Field(default=True, alias="STRIX_TELEMETRY")
 
 
 class IntegrationSettings(BaseSettings):
-    """Third-party integration credentials."""
-
     model_config = _BASE_CONFIG
 
     perplexity_api_key: str | None = Field(default=None, alias="PERPLEXITY_API_KEY")
 
 
 class Settings(BaseSettings):
-    """Composite Strix settings. Instantiate via :func:`strix.config.load_settings`."""
-
     model_config = _BASE_CONFIG
 
     llm: LlmSettings = Field(default_factory=LlmSettings)

@@ -1,9 +1,4 @@
-"""Settings loader, override switch, and disk persistence.
-
-Process-wide module cache so repeated ``load_settings()`` calls in the
-same scan are free. ``apply_config_override(path)`` invalidates the
-cache so the next ``load_settings()`` re-resolves with the new file.
-"""
+"""Settings loader, override switch, and disk persistence."""
 
 from __future__ import annotations
 
@@ -81,9 +76,6 @@ def persist_current() -> None:
         target.chmod(0o600)
 
 
-# --- internals ---------------------------------------------------------
-
-
 def _aliases_for(finfo: FieldInfo) -> list[str]:
     """Collect every env-var name that should populate ``finfo``."""
     aliases: list[str] = []
@@ -113,7 +105,6 @@ def _read_json_overrides(path: Path) -> dict[str, dict[str, Any]]:
     if not isinstance(env_block, dict):
         return {}
 
-    # Normalize to upper-case keys for matching.
     env_block_upper = {str(k).upper(): v for k, v in env_block.items()}
 
     nested: dict[str, dict[str, Any]] = {}

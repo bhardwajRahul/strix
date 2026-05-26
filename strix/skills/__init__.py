@@ -9,9 +9,6 @@ logger = logging.getLogger(__name__)
 
 _FRONTMATTER_PATTERN = re.compile(r"^---\s*\n.*?\n---\s*\n", re.DOTALL)
 
-# Categories loaded by the prompt template via explicit slash-form paths
-# (``scan_modes/<mode>``, ``coordination/<role>``). They're not
-# user-selectable through ``create_agent``'s ``skills`` argument.
 _INTERNAL_SKILL_CATEGORIES: frozenset[str] = frozenset({"scan_modes", "coordination"})
 
 
@@ -35,7 +32,6 @@ def get_all_skill_names() -> set[str]:
 
 
 def get_available_skills() -> dict[str, list[str]]:
-    """Return user-selectable skills grouped by category, alphabetised."""
     grouped: dict[str, list[str]] = {}
     for category, name in _iter_user_skill_files():
         grouped.setdefault(category, []).append(name)

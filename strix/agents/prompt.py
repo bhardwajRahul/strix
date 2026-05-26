@@ -1,9 +1,4 @@
-"""Jinja-based system-prompt renderer.
-
-Loads ``strix/agents/prompts/system_prompt.jinja`` and renders it with
-the caller's per-run context (skills, scan mode, whitebox flag,
-interactive flag, scope authorization block).
-"""
+"""Jinja-based system-prompt renderer."""
 
 from __future__ import annotations
 
@@ -71,27 +66,7 @@ def render_system_prompt(
     interactive: bool = False,
     system_prompt_context: dict[str, Any] | None = None,
 ) -> str:
-    """Render the system prompt.
-
-    Args:
-        skills: Skills the caller wants preloaded into the prompt context.
-        scan_mode: ``"deep" | "fast" | ...``. Maps to ``scan_modes/<mode>``
-            skill.
-        is_whitebox: When True, the source-aware whitebox skill stack
-            is loaded too.
-        is_root: When True, ``coordination/root_agent`` orchestration
-            guidance is auto-loaded.
-        interactive: When True, the prompt renders the interactive-mode
-            communication rules block.
-        system_prompt_context: Free-form dict that the template's
-            ``system_prompt_context`` variable receives — carries the
-            scan-scope authorization block.
-
-    Returns the rendered prompt string. If anything goes wrong (template
-    missing, render failure), returns an empty string and logs — a
-    missing prompt is survivable, a hard failure during agent
-    construction is not.
-    """
+    """Render the system prompt. Returns empty string on template failure."""
     try:
         prompt_dir = get_strix_resource_path("agents", _PROMPT_DIRNAME)
         skills_dir = get_strix_resource_path("skills")

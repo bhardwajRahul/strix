@@ -93,9 +93,6 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
         "local_sources": getattr(args, "local_sources", None) or [],
         "scope_mode": getattr(args, "scope_mode", "auto"),
         "diff_base": getattr(args, "diff_base", None),
-        # Forward the new --instruction (if any) to the resume path so it
-        # can deliver it as a fresh user message after SDK session replay.
-        # Empty string when the user didn't pass one on resume — no-op.
         "resume_instruction": getattr(args, "user_explicit_instruction", None) or "",
     }
 
@@ -190,10 +187,6 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
             finally:
                 stop_updates.set()
                 update_thread.join(timeout=1)
-                # Best-effort: tear down the sandbox session even if the
-                # run raised. ``run_strix_scan`` already does this in its
-                # own ``finally``, but call here too in case the failure
-                # was during early setup.
                 with contextlib.suppress(Exception):
                     await session_manager.cleanup(args.run_name)
 

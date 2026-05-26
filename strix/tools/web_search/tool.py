@@ -67,9 +67,6 @@ def _do_search(query: str) -> dict[str, Any]:  # noqa: PLR0911 - each error clas
         ],
     }
 
-    # Internal details (upstream URL, HTTP status, library exception text) stay
-    # in the logs; the model only ever sees a short actionable category so it
-    # can decide whether to retry, refine, or work around the gap.
     try:
         response = requests.post(url, headers=headers, json=payload, timeout=300)
         response.raise_for_status()
@@ -121,8 +118,6 @@ def _do_search(query: str) -> dict[str, Any]:  # noqa: PLR0911 - each error clas
         }
 
 
-# Perplexity request timeout is 300s; give the SDK a slightly larger
-# budget so the round-trip + JSON decode doesn't push us over.
 @function_tool(timeout=330)
 async def web_search(ctx: RunContextWrapper, query: str) -> str:
     """Real-time web search via Perplexity — your primary research tool.

@@ -23,7 +23,6 @@ from rich.text import Text
 from strix.config import load_settings
 
 
-# Display utilities
 def get_severity_color(severity: str) -> str:
     severity_colors = {
         "critical": "#dc2626",
@@ -57,7 +56,6 @@ def format_token_count(count: float | None) -> str:
 
 
 def format_vulnerability_report(report: dict[str, Any]) -> Text:  # noqa: PLR0915
-    """Format a vulnerability report for CLI display with all rich fields."""
     field_style = "bold #4ade80"
 
     text = Text()
@@ -206,7 +204,6 @@ def format_vulnerability_report(report: dict[str, Any]) -> Text:  # noqa: PLR091
 
 
 def _build_vulnerability_stats(stats_text: Text, report_state: Any) -> None:
-    """Build vulnerability section of stats text."""
     vuln_count = len(report_state.vulnerability_reports)
 
     if vuln_count > 0:
@@ -318,7 +315,6 @@ def _build_llm_usage_stats(
 
 
 def build_final_stats_text(report_state: Any) -> Text:
-    """Build final stats from Strix-owned scan artifacts."""
     stats_text = Text()
     if not report_state:
         return stats_text
@@ -401,9 +397,6 @@ def build_tui_stats_text(report_state: Any) -> Text:
     return stats_text
 
 
-# Name generation utilities
-
-
 def _slugify_for_run_name(text: str, max_length: int = 32) -> str:
     text = text.lower().strip()
     text = re.sub(r"[^a-z0-9]+", "-", text)
@@ -460,8 +453,6 @@ def generate_run_name(targets_info: list[dict[str, Any]] | None = None) -> str:
 
     return f"{slug}_{random_suffix}"
 
-
-# Target processing utilities
 
 _SUPPORTED_SCOPE_MODES = {"auto", "diff", "full"}
 _MAX_FILES_PER_SECTION = 120
@@ -712,9 +703,6 @@ def _parse_name_status_z(raw_output: bytes) -> list[DiffEntry]:
         if len(status_raw) > 1 and status_raw[1:].isdigit():
             similarity = int(status_raw[1:])
 
-        # Git's -z output for --name-status is:
-        # - non-rename/copy: <status>\0<path>\0
-        # - rename/copy: <statusN>\0<old_path>\0<new_path>\0
         if status_code in {"R", "C"} and index + 2 < len(tokens):
             old_path = tokens[index + 1]
             new_path = tokens[index + 2]
@@ -1264,7 +1252,6 @@ def rewrite_localhost_targets(targets_info: list[dict[str, Any]], host_gateway: 
                 details["target_ip"] = host_gateway
 
 
-# Repository utilities
 def clone_repository(repo_url: str, run_name: str, dest_name: str | None = None) -> str:
     console = Console()
 
@@ -1341,7 +1328,6 @@ def clone_repository(repo_url: str, run_name: str, dest_name: str | None = None)
         sys.exit(1)
 
 
-# Docker utilities
 def check_docker_connection() -> Any:
     try:
         return docker.from_env()

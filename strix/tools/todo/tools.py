@@ -1,14 +1,4 @@
-"""Per-agent todo tools.
-
-Per-agent in-memory dict, scoped via ``ctx.context['agent_id']``. The
-table is mirrored to ``{state_dir}/todos.json`` after every mutation so a
-process restart can ``hydrate_todos_from_disk`` and each respawned
-agent finds its prior list intact. The persistence is best-effort —
-errors are logged and swallowed so a disk failure can't kill the agent
-mid-call. Bulk forms are preserved so the prompt-template documentation
-still works (``todos`` / ``updates`` / ``todo_ids`` accept JSON strings
-or comma-separated strings).
-"""
+"""Per-agent todo tools — mirrored to {state_dir}/todos.json."""
 
 from __future__ import annotations
 
@@ -42,26 +32,13 @@ def _todo_sort_key(todo: dict[str, Any]) -> tuple[int, int, str]:
     )
 
 
-# Per-agent silo: ``_todos_storage[agent_id][todo_id] = todo_dict``.
-# Keyed by ``ctx.context['agent_id']`` so two agents in the same scan
-# don't see each other's lists.
 _todos_storage: dict[str, dict[str, dict[str, Any]]] = {}
 
-# On-disk mirror path. Set by ``hydrate_todos_from_disk`` once per scan;
-# unset means "no persistence" (e.g. unit tests). All writes go through
-# ``_persist`` which is a no-op until the path is set.
 _todos_path: Path | None = None
 _todos_io_lock = threading.RLock()
 
 
 def hydrate_todos_from_disk(state_dir: Path) -> None:
-    """Wire the on-disk mirror at ``{state_dir}/todos.json`` and reload it.
-
-    Called by :func:`run_strix_scan` once at scan setup. Subsequent CRUD
-    calls auto-persist after every mutation. Idempotent on missing file.
-    Tolerant of corruption — logs and starts empty rather than failing
-    the scan over a broken sidecar artifact.
-    """
     global _todos_path  # noqa: PLW0603
     _todos_path = state_dir / "todos.json"
     with _todos_io_lock:
@@ -99,11 +76,6 @@ def hydrate_todos_from_disk(state_dir: Path) -> None:
 
 
 def _persist() -> None:
-    """Atomic-rename mirror of ``_todos_storage`` → ``{state_dir}/todos.json``.
-
-    No-op when ``_todos_path`` isn't wired (tests). Errors are logged
-    and swallowed.
-    """
     path = _todos_path
     if path is None:
         return
@@ -282,9 +254,6 @@ def _apply_single_update(
         todo["completed_at"] = datetime.now(UTC).isoformat() if status_candidate == "done" else None
     todo["updated_at"] = datetime.now(UTC).isoformat()
     return None
-
-
-# --- public tools ---------------------------------------------------------
 
 
 @function_tool(timeout=30)
