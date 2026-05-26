@@ -18,6 +18,10 @@ wired via ``http_proxy`` / ``https_proxy`` env vars — **do not pass
 captures all page traffic. Localhost (CDP) traffic is excluded via
 ``NO_PROXY=localhost,127.0.0.1``.
 
+Default viewport is 1280×720. For sites that gate behavior on real
+desktop dimensions (responsive breakpoints, bot fingerprinting), run
+``agent-browser viewport 1920 1080`` once per session.
+
 ## The core loop
 
 ```bash
@@ -37,7 +41,7 @@ next ref interaction.
 ```bash
 # Take a screenshot of a page
 agent-browser open https://example.com
-agent-browser screenshot home.png
+agent-browser screenshot
 agent-browser close
 
 # Search, click a result, and capture it
@@ -48,7 +52,7 @@ agent-browser press Enter
 agent-browser wait --load networkidle
 agent-browser snapshot -i                      # refs now reflect results
 agent-browser click @e5                        # click a result
-agent-browser screenshot result.png
+agent-browser screenshot
 ```
 
 The browser stays running across commands so these feel like a single
@@ -241,15 +245,22 @@ shell command alone does **not** put the image into your context —
 chain it with the SDK ``view_image`` tool to actually see it:
 
 ```bash
-exec_command:  agent-browser screenshot /workspace/page.png
-view_image:    {"path": "/workspace/page.png"}
+exec_command:  agent-browser screenshot
+view_image:    {"path": "<path printed on stdout>"}
 ```
 
+Default output directory is ``/workspace/.agent-browser-screenshots/``,
+which ``view_image`` can read. Prefer the no-arg form (the CLI prints
+the full path on stdout — pass that to ``view_image``). If you need a
+specific filename, keep it inside that directory or a sibling hidden
+dir under ``/workspace``. Never write screenshots to ``/tmp`` —
+``view_image`` rejects anything outside the workspace root.
+
 ```bash
-agent-browser screenshot                        # temp path, printed on stdout
-agent-browser screenshot page.png               # specific path (relative to cwd)
-agent-browser screenshot --full full.png        # full scroll height
-agent-browser screenshot --annotate map.png     # numbered labels + legend keyed to snapshot refs
+agent-browser screenshot                        # path printed on stdout
+agent-browser screenshot /workspace/.agent-browser-screenshots/page.png
+agent-browser screenshot --full                 # full scroll height
+agent-browser screenshot --annotate             # numbered labels + legend keyed to snapshot refs
 ```
 
 `--annotate` is designed for multimodal models: each label `[N]` maps
@@ -261,6 +272,12 @@ tokens; screenshots cost more. Use `snapshot` first; reach for
 `screenshot + view_image` only when you actually need pixels (visual
 layout questions, captchas, custom widgets where the accessibility
 tree is incomplete).
+
+If ``view_image`` errors back at you (rejected image, "vision not
+supported", or similar), you are running on a text-only model — stop
+calling it and stop taking screenshots. Drive the page entirely from
+`snapshot -i` refs, `eval` for any DOM/JS state you need to read, and
+`text @ref` / `get text` for content extraction.
 
 ### Handle multiple pages via tabs
 

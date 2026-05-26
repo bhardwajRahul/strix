@@ -90,6 +90,8 @@ sudo -u pentester certutil -N -d sql:/home/pentester/.pki/nssdb --empty-password
 sudo -u pentester certutil -A -n "Testing Root CA" -t "C,," -i /app/certs/ca.crt -d sql:/home/pentester/.pki/nssdb
 echo "✅ CA added to browser trust store"
 
+mkdir -p /workspace/.agent-browser-screenshots
+
 echo "✅ Container ready"
 
 cd /workspace

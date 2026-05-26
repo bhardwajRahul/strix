@@ -88,10 +88,10 @@ RUN npm install -g retire@latest && \
     npm install -g tree-sitter-cli@latest && \
     npm install -g agent-browser@0.26.0
 
-USER pentester
 ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
 ENV AGENT_BROWSER_USER_AGENT="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-ENV AGENT_BROWSER_ARGS="--disable-blink-features=AutomationControlled --exclude-switches=enable-automation --disable-features=IsolateOrigins,site-per-process,Translate,BlinkGenPropertyTrees --no-first-run --no-default-browser-check --window-size=1920,1080 --lang=en-US,en --disable-infobars --disable-notifications --disable-save-password-bubble --disable-session-crashed-bubble"
+ENV AGENT_BROWSER_ARGS="--disable-blink-features=AutomationControlled,--no-first-run,--no-default-browser-check,--lang=en-US"
+ENV AGENT_BROWSER_SCREENSHOT_DIR=/workspace/.agent-browser-screenshots
 RUN /home/pentester/.npm-global/bin/agent-browser doctor --offline --quick
 
 RUN set -eux; \
