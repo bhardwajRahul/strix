@@ -1,6 +1,7 @@
-from . import posthog
+from . import posthog, scarf
 
 
 __all__ = [
     "posthog",
+    "scarf",
 ]

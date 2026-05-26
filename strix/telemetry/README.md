@@ -18,11 +18,9 @@ We collect only very **basic** usage data including:
 **Model Usage:** Which LLM model is being used (not prompts or responses)\
 **Aggregate Metrics:** Vulnerability counts by severity
 
-For complete transparency, you can inspect our [telemetry implementation](https://github.com/usestrix/strix/blob/main/strix/telemetry/posthog.py) to see the exact events we track.
-
 ### What We **Never** Collect
 
-- IP addresses, usernames, or any identifying information
+- Usernames, or any identifying information
 - Scan targets, file paths, target URLs, or domains
 - Vulnerability details, descriptions, or code
 - LLM requests and responses

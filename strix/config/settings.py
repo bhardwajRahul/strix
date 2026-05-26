@@ -72,17 +72,11 @@ class RuntimeSettings(BaseSettings):
 
 
 class TelemetrySettings(BaseSettings):
-    """Telemetry toggles. ``posthog`` is None → inherit ``master``."""
+    """Telemetry toggle."""
 
     model_config = _BASE_CONFIG
 
-    master: bool = Field(default=True, alias="STRIX_TELEMETRY")
-    posthog: bool | None = Field(default=None, alias="STRIX_POSTHOG_TELEMETRY")
-
-    @property
-    def posthog_enabled(self) -> bool:
-        """Effective PostHog toggle: explicit value if set, else ``master``."""
-        return self.master if self.posthog is None else self.posthog
+    enabled: bool = Field(default=True, alias="STRIX_TELEMETRY")
 
 
 class IntegrationSettings(BaseSettings):

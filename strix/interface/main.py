@@ -44,7 +44,7 @@ from strix.interface.utils import (
 )
 from strix.report.state import get_global_report_state
 from strix.report.writer import read_run_record, write_run_record
-from strix.telemetry import posthog
+from strix.telemetry import posthog, scarf
 from strix.telemetry.logging import configure_dependency_logging
 
 
@@ -735,13 +735,15 @@ def main() -> None:
         # re-supplying targets / instructions / scope.
         _persist_run_record(args)
 
-    posthog.start(
-        model=load_settings().llm.model,
-        scan_mode=args.scan_mode,
-        is_whitebox=is_whitebox_scan(args.targets_info),
-        interactive=not args.non_interactive,
-        has_instructions=bool(args.instruction),
-    )
+    _telemetry_start_kwargs = {
+        "model": load_settings().llm.model,
+        "scan_mode": args.scan_mode,
+        "is_whitebox": is_whitebox_scan(args.targets_info),
+        "interactive": not args.non_interactive,
+        "has_instructions": bool(args.instruction),
+    }
+    posthog.start(**_telemetry_start_kwargs)
+    scarf.start(**_telemetry_start_kwargs)
 
     exit_reason = "user_exit"
     try:
@@ -754,6 +756,7 @@ def main() -> None:
     except Exception as e:
         exit_reason = "error"
         posthog.error("unhandled_exception", str(e))
+        scarf.error("unhandled_exception", str(e))
         raise
     finally:
         report_state = get_global_report_state()
@@ -764,6 +767,7 @@ def main() -> None:
             )
             report_state.cleanup(status=status)
             posthog.end(report_state, exit_reason=exit_reason)
+            scarf.end(report_state, exit_reason=exit_reason)
 
     results_path = run_dir_for(args.run_name)
     display_completion_message(args, results_path)
