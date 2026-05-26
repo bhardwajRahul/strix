@@ -14,7 +14,7 @@ from agents.exceptions import AgentsException, MaxTurnsExceeded, UserError
 from openai import APIError
 
 from strix.core.inputs import child_initial_input
-from strix.core.sessions import open_agent_session
+from strix.core.sessions import open_agent_session, strip_latest_image_from_session
 
 
 if TYPE_CHECKING:
@@ -31,6 +31,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 StreamEventSink = Callable[[str, Any], None]
+
+_INPUT_REJECTION_CODES = frozenset({400, 404, 422})
 
 
 async def run_agent_loop(
@@ -321,7 +323,7 @@ async def _run_noninteractive_until_lifecycle(
         )
 
 
-async def _run_cycle(
+async def _run_cycle(  # noqa: PLR0912
     agent: Any,
     coordinator: AgentCoordinator,
     agent_id: str,
@@ -335,47 +337,68 @@ async def _run_cycle(
     event_sink: StreamEventSink | None,
     hooks: RunHooks[dict[str, Any]] | None,
 ) -> RunResultBase | None:
-    try:
-        await coordinator.mark_running(agent_id)
-        stream = Runner.run_streamed(
-            agent,
-            input=input_data,
-            run_config=run_config,
-            context=context,
-            max_turns=max_turns,
-            session=session,
-            hooks=hooks,
-        )
-        await coordinator.attach_stream(agent_id, stream)
+    image_strips = 0
+    while True:
         try:
-            async for event in stream.stream_events():
-                if event_sink is not None:
-                    try:
-                        event_sink(agent_id, event)
-                    except Exception:
-                        logger.exception("stream event sink failed for %s", agent_id)
-            if stream.run_loop_exception is not None:
-                raise stream.run_loop_exception
-        finally:
-            await coordinator.detach_stream(agent_id, stream)
-    except Exception as exc:
-        if not interactive:
-            raise
-        if isinstance(exc, MaxTurnsExceeded):
-            status: Status = "stopped"
-        elif isinstance(exc, UserError | AgentsException | APIError):
-            status = "failed"
+            await coordinator.mark_running(agent_id)
+            stream = Runner.run_streamed(
+                agent,
+                input=input_data,
+                run_config=run_config,
+                context=context,
+                max_turns=max_turns,
+                session=session,
+                hooks=hooks,
+            )
+            await coordinator.attach_stream(agent_id, stream)
+            try:
+                async for event in stream.stream_events():
+                    if event_sink is not None:
+                        try:
+                            event_sink(agent_id, event)
+                        except Exception:
+                            logger.exception("stream event sink failed for %s", agent_id)
+                if stream.run_loop_exception is not None:
+                    raise stream.run_loop_exception
+            finally:
+                await coordinator.detach_stream(agent_id, stream)
+        except Exception as exc:
+            if (
+                image_strips < 3
+                and session is not None
+                and getattr(exc, "status_code", None) in _INPUT_REJECTION_CODES
+            ):
+                try:
+                    stripped = await strip_latest_image_from_session(session)
+                except Exception:
+                    logger.exception("image-strip recovery failed for %s", agent_id)
+                    stripped = False
+                if stripped:
+                    image_strips += 1
+                    logger.info(
+                        "Stripped latest image from %s session after rejection; retrying (%d)",
+                        agent_id,
+                        image_strips,
+                    )
+                    input_data = []
+                    continue
+            if not interactive:
+                raise
+            if isinstance(exc, MaxTurnsExceeded):
+                status: Status = "stopped"
+            elif isinstance(exc, UserError | AgentsException | APIError):
+                status = "failed"
+            else:
+                status = "crashed"
+            logger.exception("agent run failed for %s; parking as %s", agent_id, status)
+            await coordinator.set_status(agent_id, status)
+            await _notify_parent_on_crash(coordinator, agent_id, status)
+            if context.get("parent_id") is None and status in {"failed", "crashed"}:
+                raise
+            return None
         else:
-            status = "crashed"
-        logger.exception("agent run failed for %s; parking as %s", agent_id, status)
-        await coordinator.set_status(agent_id, status)
-        await _notify_parent_on_crash(coordinator, agent_id, status)
-        if context.get("parent_id") is None and status in {"failed", "crashed"}:
-            raise
-        return None
-    else:
-        await _settle_run_result(coordinator, agent_id, interactive)
-        return stream
+            await _settle_run_result(coordinator, agent_id, interactive)
+            return stream
 
 
 async def _settle_run_result(
