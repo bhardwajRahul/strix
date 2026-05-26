@@ -998,9 +998,7 @@ class StrixTUIApp(App):  # type: ignore[misc]
         self,
     ) -> tuple[Any, str | None]:
         if not self.selected_agent_id:
-            return self._get_chat_placeholder_content(
-                "Select an agent from the tree to see its activity.", "placeholder-no-agent"
-            )
+            return self._get_chat_placeholder_content("Loading...", "placeholder-no-agent")
 
         events = self._gather_agent_events(self.selected_agent_id)
 
@@ -1353,7 +1351,9 @@ class StrixTUIApp(App):  # type: ignore[misc]
 
     def _agent_vulnerability_count(self, agent_id: str) -> int:
         return sum(
-            1 for vuln in self.report_state.vulnerability_reports if vuln.get("agent_id") == agent_id
+            1
+            for vuln in self.report_state.vulnerability_reports
+            if vuln.get("agent_id") == agent_id
         )
 
     def _gather_agent_events(self, agent_id: str) -> list[dict[str, Any]]:

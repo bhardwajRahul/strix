@@ -11,8 +11,9 @@ Two flavors:
   ``create_agent`` graph tool. Carries ``agent_finish`` and stops
   after that tool reports ``agent_completed``.
 
-Skills are baked into the system prompt at scan bring-up; there's no
-runtime skill-loading tool.
+Skills are baked into the system prompt at scan bring-up. The
+``load_skill`` tool is also available for on-demand inline reference
+to any skill the agent didn't preload.
 """
 
 from __future__ import annotations

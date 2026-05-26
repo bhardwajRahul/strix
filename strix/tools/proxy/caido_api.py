@@ -324,9 +324,9 @@ async def replay_send_raw(
             "status": "ERROR",
             "error": (
                 f"Caido replay dispatch did not complete within "
-                f"{_REPLAY_SEND_TIMEOUT_SECONDS:.0f}s. The target may be "
+                f"{_REPLAY_SEND_TIMEOUT_SECONDS:.0f}s — the target may be "
                 "unroutable from the sandbox, or Caido's outbound HTTP client "
-                "is stalled. Check the target host/port and retry."
+                "is stalled; check the target host/port and retry"
             ),
             "elapsed_ms": elapsed_ms,
             "response_raw": None,

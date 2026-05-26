@@ -196,6 +196,7 @@ def _create_note_impl(
                 "success": True,
                 "note_id": note_id,
                 "message": f"Note '{title}' created successfully",
+                "total_count": len(_notes_storage),
             }
 
 
@@ -214,9 +215,15 @@ def _list_notes_impl(
                 "success": False,
                 "error": f"Failed to list notes: {e}",
                 "notes": [],
+                "filtered_count": 0,
                 "total_count": 0,
             }
-    return {"success": True, "notes": notes, "total_count": len(notes)}
+        return {
+            "success": True,
+            "notes": notes,
+            "filtered_count": len(notes),
+            "total_count": len(_notes_storage),
+        }
 
 
 def _get_note_impl(note_id: str) -> dict[str, Any]:
@@ -267,7 +274,9 @@ def _update_note_impl(
             _persist()
             return {
                 "success": True,
+                "note_id": note_id,
                 "message": f"Note '{note['title']}' updated successfully",
+                "total_count": len(_notes_storage),
             }
 
 
@@ -285,7 +294,9 @@ def _delete_note_impl(note_id: str) -> dict[str, Any]:
             _persist()
             return {
                 "success": True,
+                "note_id": note_id,
                 "message": f"Note '{note_title}' deleted successfully",
+                "total_count": len(_notes_storage),
             }
 
 
@@ -377,7 +388,7 @@ async def list_notes(
 
 @function_tool(timeout=30)
 async def get_note(ctx: RunContextWrapper, note_id: str) -> str:
-    """Fetch one note by its 5-char ID. Returns the full content.
+    """Fetch one note by its 6-char ID. Returns the full content.
 
     Args:
         note_id: Note id from ``create_note`` or a ``list_notes`` entry.
@@ -402,7 +413,7 @@ async def update_note(
     ``get_note``, concat, and pass the result.
 
     Args:
-        note_id: Target note's 5-char ID.
+        note_id: Target note's 6-char ID.
         title: New title, or ``None`` to keep.
         content: New content, or ``None`` to keep.
         tags: New tags list, or ``None`` to keep.

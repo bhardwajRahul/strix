@@ -42,7 +42,7 @@ class ListRequestsRenderer(BaseToolRenderer):
     css_classes: ClassVar[list[str]] = ["tool-call", "proxy-tool"]
 
     @classmethod
-    def render(cls, tool_data: dict[str, Any]) -> Static:  # noqa: PLR0912  # noqa: PLR0912
+    def render(cls, tool_data: dict[str, Any]) -> Static:  # noqa: PLR0912, PLR0915
         args = tool_data.get("args", {})
         result = tool_data.get("result")
         status = tool_data.get("status", "running")
@@ -73,21 +73,25 @@ class ListRequestsRenderer(BaseToolRenderer):
             if "error" in result:
                 text.append(f"  error: {_sanitize(str(result['error']), 150)}", style="#ef4444")
             else:
-                total = result.get("total_count", 0)
-                requests = result.get("requests", [])
+                entries = result.get("entries", [])
+                page_info = result.get("page_info") or {}
+                has_more = (
+                    bool(page_info.get("has_next_page")) if isinstance(page_info, dict) else False
+                )
+                count_suffix = "+" if has_more else ""
+                text.append(f"  [{len(entries)}{count_suffix} found]", style="dim")
 
-                text.append(f"  [{total} found]", style="dim")
-
-                if requests and isinstance(requests, list):
+                if entries and isinstance(entries, list):
                     text.append("\n")
-                    for i, req in enumerate(requests[:MAX_REQUESTS_DISPLAY]):
-                        if not isinstance(req, dict):
+                    for i, entry in enumerate(entries[:MAX_REQUESTS_DISPLAY]):
+                        if not isinstance(entry, dict):
                             continue
-                        method = req.get("method", "?")
-                        host = req.get("host", "")
-                        path = req.get("path", "/")
-                        resp = req.get("response") or {}
-                        code = resp.get("statusCode") if isinstance(resp, dict) else None
+                        req = entry.get("request") or {}
+                        resp = entry.get("response") or {}
+                        method = req.get("method", "?") if isinstance(req, dict) else "?"
+                        host = req.get("host", "") if isinstance(req, dict) else ""
+                        path = req.get("path", "/") if isinstance(req, dict) else "/"
+                        code = resp.get("status_code") if isinstance(resp, dict) else None
 
                         text.append("  ")
                         text.append(f"{method:6}", style="#a78bfa")
@@ -95,13 +99,13 @@ class ListRequestsRenderer(BaseToolRenderer):
                         if code:
                             text.append(f" {code}", style=_status_style(code))
 
-                        if i < min(len(requests), MAX_REQUESTS_DISPLAY) - 1:
+                        if i < min(len(entries), MAX_REQUESTS_DISPLAY) - 1:
                             text.append("\n")
 
-                    if len(requests) > MAX_REQUESTS_DISPLAY:
+                    if len(entries) > MAX_REQUESTS_DISPLAY:
                         text.append("\n")
                         text.append(
-                            f"  ... +{len(requests) - MAX_REQUESTS_DISPLAY} more",
+                            f"  ... +{len(entries) - MAX_REQUESTS_DISPLAY} more",
                             style="dim italic",
                         )
 
@@ -139,14 +143,14 @@ class ViewRequestRenderer(BaseToolRenderer):
         if status == "completed" and isinstance(result, dict):
             if "error" in result:
                 text.append(f"  error: {_sanitize(str(result['error']), 150)}", style="#ef4444")
-            elif "matches" in result:
-                matches = result.get("matches", [])
-                total = result.get("total_matches", len(matches))
+            elif "hits" in result:
+                hits = result.get("hits", [])
+                total = result.get("total_hits", len(hits))
                 text.append(f"  [{total} matches]", style="dim")
 
-                if matches and isinstance(matches, list):
+                if hits and isinstance(hits, list):
                     text.append("\n")
-                    for i, m in enumerate(matches[:5]):
+                    for i, m in enumerate(hits[:5]):
                         if not isinstance(m, dict):
                             continue
                         before = m.get("before", "") or ""
@@ -164,19 +168,20 @@ class ViewRequestRenderer(BaseToolRenderer):
                         if after:
                             text.append(f"{after}...", style="dim")
 
-                        if i < min(len(matches), 5) - 1:
+                        if i < min(len(hits), 5) - 1:
                             text.append("\n")
 
-                    if len(matches) > 5:
+                    if len(hits) > 5:
                         text.append("\n")
-                        text.append(f"  ... +{len(matches) - 5} more matches", style="dim italic")
+                        text.append(f"  ... +{len(hits) - 5} more matches", style="dim italic")
 
             elif "content" in result:
-                showing = result.get("showing_lines", "")
+                page = result.get("page", 1)
+                total_lines = result.get("total_lines", 0)
                 has_more = result.get("has_more", False)
                 content = result.get("content", "")
 
-                text.append(f"  [{showing}]", style="dim")
+                text.append(f"  [page {page}, {total_lines} lines]", style="dim")
 
                 if content and isinstance(content, str):
                     lines = content.split("\n")[:15]

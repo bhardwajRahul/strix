@@ -327,7 +327,7 @@ async def create_todo(ctx: RunContextWrapper, todos: str) -> str:
         tasks = _normalize_bulk_todos(todos)
         if not tasks:
             return json.dumps(
-                {"success": False, "error": "Provide a non-empty 'todos' list to create."},
+                {"success": False, "error": "Provide a non-empty 'todos' list to create"},
                 ensure_ascii=False,
                 default=str,
             )
@@ -469,7 +469,7 @@ async def update_todo(ctx: RunContextWrapper, updates: str) -> str:
         updates_to_apply = _normalize_bulk_updates(updates)
         if not updates_to_apply:
             return json.dumps(
-                {"success": False, "error": "Provide a non-empty 'updates' list."},
+                {"success": False, "error": "Provide a non-empty 'updates' list"},
                 ensure_ascii=False,
                 default=str,
             )
@@ -511,7 +511,7 @@ def _mark(*, agent_id: str, todo_ids: str, new_status: str) -> str:
         agent_todos = _get_agent_todos(agent_id)
         ids = _normalize_todo_ids(todo_ids)
         if not ids:
-            msg = f"Provide a non-empty 'todo_ids' list to mark as {new_status}."
+            msg = f"Provide a non-empty 'todo_ids' list to mark as {new_status}"
             return json.dumps({"success": False, "error": msg}, ensure_ascii=False, default=str)
 
         marked: list[str] = []
@@ -586,7 +586,7 @@ async def delete_todo(ctx: RunContextWrapper, todo_ids: str) -> str:
         ids = _normalize_todo_ids(todo_ids)
         if not ids:
             return json.dumps(
-                {"success": False, "error": "Provide a non-empty 'todo_ids' list to delete."},
+                {"success": False, "error": "Provide a non-empty 'todo_ids' list to delete"},
                 ensure_ascii=False,
                 default=str,
             )

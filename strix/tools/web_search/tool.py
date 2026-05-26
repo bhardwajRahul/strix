@@ -43,16 +43,16 @@ security implications and details."""
 
 def _do_search(query: str) -> dict[str, Any]:  # noqa: PLR0911 - each error class needs its own sanitized return
     if not query or not query.strip():
-        return {"success": False, "message": "Query cannot be empty."}
+        return {"success": False, "error": "Query cannot be empty"}
 
     api_key = load_settings().integrations.perplexity_api_key
     if not api_key:
         logger.warning("web_search invoked without PERPLEXITY_API_KEY configured")
         return {
             "success": False,
-            "message": (
+            "error": (
                 "Web search is not configured for this scan "
-                "(operator needs to set PERPLEXITY_API_KEY). Proceed without it."
+                "(operator needs to set PERPLEXITY_API_KEY). Proceed without it"
             ),
         }
     logger.info("web_search query (len=%d): %s", len(query), query[:120])
@@ -78,7 +78,7 @@ def _do_search(query: str) -> dict[str, Any]:  # noqa: PLR0911 - each error clas
         logger.warning("web_search timed out")
         return {
             "success": False,
-            "message": "Web search timed out. Try again or shorten the query.",
+            "error": "Web search timed out. Try again or shorten the query",
         }
     except requests.exceptions.HTTPError as exc:
         status = exc.response.status_code if exc.response is not None else None
@@ -86,32 +86,32 @@ def _do_search(query: str) -> dict[str, Any]:  # noqa: PLR0911 - each error clas
         if status is not None and 400 <= status < 500:
             return {
                 "success": False,
-                "message": (
+                "error": (
                     "Web search rejected the query. Refine it "
-                    "(more specific, shorter, no unusual characters) and retry."
+                    "(more specific, shorter, no unusual characters) and retry"
                 ),
             }
         return {
             "success": False,
-            "message": "Web search service is unavailable. Try again later.",
+            "error": "Web search service is unavailable. Try again later",
         }
     except requests.exceptions.RequestException:
         logger.exception("web_search network error")
         return {
             "success": False,
-            "message": "Web search network error. Try again later.",
+            "error": "Web search network error. Try again later",
         }
     except (KeyError, IndexError, ValueError):
         logger.exception("web_search response shape unexpected")
         return {
             "success": False,
-            "message": "Web search returned an unexpected response. Try again.",
+            "error": "Web search returned an unexpected response. Try again",
         }
     except Exception:
         logger.exception("web_search failed")
         return {
             "success": False,
-            "message": "Web search failed unexpectedly.",
+            "error": "Web search failed unexpectedly",
         }
     else:
         return {
@@ -154,6 +154,26 @@ async def web_search(ctx: RunContextWrapper, query: str) -> str:
     A security-focused system prompt biases responses toward CVEs,
     exploits, Kali-compatible tooling, and concrete code/command
     examples.
+
+    **Good example queries** (each is a full sentence, names a
+    version/product, and asks one concrete thing):
+
+    - ``"Found OpenSSH 7.4 on port 22 — any known RCE or privesc for
+      this exact version?"``
+    - ``"Cloudflare WAF is blocking my sqlmap on a login form — what
+      bypass techniques work in 2025?"``
+    - ``"Target runs WordPress 5.8.3 + WooCommerce 6.1.1 — current
+      RCE chains for this combo?"``
+    - ``"Low-priv shell on Ubuntu 20.04 kernel 5.4.0-74-generic — what
+      local privesc exploits hit this kernel?"``
+    - ``"Compromised domain user on Windows Server 2019 AD — quietest
+      paths to Domain Admin without tripping EDR?"``
+    - ``"'Access denied' uploading a webshell to IIS 10.0 — alternate
+      Windows IIS upload bypass techniques?"``
+    - ``"Discovered Jenkins 2.401.3 on staging — current authn-bypass
+      and RCE exploits for this version?"``
+    - ``"Best 2025 Python lib for JWT algorithm-confusion + weak-secret
+      cracking?"``
 
     Args:
         query: The search query — a full sentence with version numbers,

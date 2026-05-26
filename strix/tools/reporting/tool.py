@@ -209,7 +209,7 @@ async def _do_create(  # noqa: PLR0912
             errors.append(cwe_err)
 
     if errors:
-        return {"success": False, "message": "Validation failed", "errors": errors}
+        return {"success": False, "error": "Validation failed", "errors": errors}
 
     cvss_score, severity, _vector = _calculate_cvss(cvss_breakdown)
 
@@ -248,9 +248,9 @@ async def _do_create(  # noqa: PLR0912
             )
             return {
                 "success": False,
-                "message": (
+                "error": (
                     f"Potential duplicate of '{duplicate_title}' "
-                    f"(id={duplicate_id[:8]}...). Do not re-report the same vulnerability."
+                    f"(id={duplicate_id[:8]}...) — do not re-report the same vulnerability"
                 ),
                 "duplicate_of": duplicate_id,
                 "duplicate_title": duplicate_title,
@@ -280,7 +280,7 @@ async def _do_create(  # noqa: PLR0912
         )
     except (ImportError, AttributeError) as e:
         logger.exception("create_vulnerability_report persistence failed")
-        return {"success": False, "message": f"Failed to create vulnerability report: {e!s}"}
+        return {"success": False, "error": f"Failed to create vulnerability report: {e!s}"}
     else:
         logger.info(
             "Vulnerability report created: id=%s severity=%s cvss=%.1f title=%s",
@@ -351,10 +351,9 @@ async def create_vulnerability_report(
     - Avoid hedging language; be precise and non-vague.
 
     **White-box requirement**: when source is available, you MUST
-    populate ``code_locations`` with one entry per affected line range.
-    The ``fix_before`` field must be a verbatim copy of the source at
-    the specified line range — it's used as a literal GitHub/GitLab
-    PR suggestion block.
+    populate ``code_locations``. See the ``code_locations`` arg below
+    for the full rules around ``fix_before`` / ``fix_after``,
+    multi-part fixes, and informational-vs-actionable entries.
 
     **CVSS breakdown** is an object with all 8 metrics (each a single
     uppercase letter):
@@ -383,8 +382,30 @@ async def create_vulnerability_report(
 
     **CVE / CWE rules**: pass the bare ID only (``CVE-2024-1234``,
     ``CWE-89``) — no name, no parenthetical. Be 100% certain; if
-    unsure, omit. Always prefer the most specific child CWE over a
-    broad parent (CWE-89 not CWE-74; CWE-78 not CWE-77).
+    unsure, use ``web_search`` to verify the ID before passing, or omit
+    the field entirely. Always prefer the most specific child CWE over
+    a broad parent (CWE-89 not CWE-74; CWE-78 not CWE-77). Do NOT use
+    broad/parent CWEs like CWE-74, CWE-20, CWE-200, CWE-284, or
+    CWE-693.
+
+    Common CWE references (use the ID only — names are listed here
+    just for your lookup):
+
+    - **Injection**: CWE-79 XSS, CWE-89 SQLi, CWE-78 OS Command
+      Injection, CWE-94 Code Injection, CWE-77 Command Injection.
+    - **Auth / Access**: CWE-287 Improper Authentication, CWE-862
+      Missing Authorization, CWE-863 Incorrect Authorization, CWE-306
+      Missing Auth for Critical Function, CWE-639 Authz Bypass via
+      User-Controlled Key.
+    - **Web**: CWE-352 CSRF, CWE-918 SSRF, CWE-601 Open Redirect,
+      CWE-434 Unrestricted File Upload.
+    - **Memory**: CWE-787 OOB Write, CWE-125 OOB Read, CWE-416 UAF,
+      CWE-120 Classic Buffer Overflow.
+    - **Data**: CWE-502 Deserialization of Untrusted Data, CWE-22
+      Path Traversal, CWE-611 XXE.
+    - **Crypto / Config**: CWE-798 Hard-coded Credentials, CWE-327
+      Broken / Risky Crypto, CWE-311 Missing Encryption, CWE-916 Weak
+      Password Hashing.
 
     Args:
         title: Specific finding title (e.g.
@@ -402,11 +423,69 @@ async def create_vulnerability_report(
         method: HTTP method when relevant.
         cve: ``CVE-YYYY-NNNNN`` if certain, else omit.
         cwe: ``CWE-NNN`` (most specific child) if certain, else omit.
-        code_locations: Required for white-box findings. List of
-            objects, each with ``file`` (relative path), ``start_line``,
-            ``end_line``, optional ``snippet``, ``label``,
-            ``fix_before`` (verbatim source), ``fix_after`` (suggested
-            replacement).
+        code_locations: White-box findings — list of location objects.
+
+            **How ``fix_before`` / ``fix_after`` work**: they're used as
+            literal GitHub/GitLab PR suggestion blocks. When a reviewer
+            accepts the suggestion, the platform replaces the **exact
+            lines from ``start_line`` to ``end_line``** with
+            ``fix_after``. Therefore:
+
+            1. ``fix_before`` must be a **VERBATIM** copy of the source
+               at those lines — same whitespace, indentation, line
+               breaks. If it doesn't match character-for-character, the
+               suggestion will corrupt the code when accepted.
+            2. ``fix_after`` is the COMPLETE replacement for that
+               entire block (may be more or fewer lines).
+            3. ``start_line`` / ``end_line`` must precisely cover the
+               lines in ``fix_before`` — no more, no less.
+
+            **Multi-part fixes**: many fixes touch multiple
+            non-contiguous parts of a file (e.g. add an import at the
+            top AND change code lower down). Since each
+            ``fix_before`` / ``fix_after`` pair covers ONE contiguous
+            block, create **separate location entries** for each
+            non-contiguous part. Use ``label`` to describe each part's
+            role (``"Add escape helper import"``, ``"Sanitize input
+            before SQL"``). Order primary fix first, supporting
+            changes (imports, config) after.
+
+            **Informational vs actionable**:
+            - With ``fix_before`` / ``fix_after``: actionable fix
+              (renders as a PR suggestion block).
+            - Without them: informational context (e.g. showing the
+              source of tainted data, or a sink that doesn't need
+              direct editing).
+
+            **Per-location fields**:
+            - ``file`` (REQUIRED): path **relative** to repo root. No
+              leading slash, no ``..``, no ``/workspace/`` prefix.
+              Right: ``"src/db/queries.ts"``. Wrong:
+              ``"/workspace/repo/src/db/queries.ts"``, ``"./src/x.py"``,
+              ``"../../etc/passwd"``.
+            - ``start_line`` (REQUIRED): 1-based; positive integer.
+              Verify against the actual file — do NOT guess.
+            - ``end_line`` (REQUIRED): 1-based; ``>= start_line``.
+              Only equal to ``start_line`` when the block truly is one
+              line.
+            - ``snippet`` (optional): verbatim source at this range.
+            - ``label`` (optional): short role description; especially
+              important for multi-part fixes.
+            - ``fix_before`` (optional): verbatim copy of the
+              vulnerable code, lines ``start_line``-``end_line``.
+            - ``fix_after`` (optional): complete replacement for that
+              block; syntactically valid.
+
+            **Common mistakes to avoid**:
+            - Guessing line numbers instead of reading the file.
+            - Paraphrasing / reformatting code in ``fix_before``.
+            - Setting ``start_line == end_line`` when the vulnerable
+              code spans multiple lines.
+            - Bundling an import addition and a far-away code change
+              into one location — split them.
+            - Padding ``fix_before`` with surrounding context lines
+              that aren't part of the fix.
+            - Duplicating the same change across multiple locations.
     """
     inner = ctx.context if isinstance(ctx.context, dict) else {}
     raw_agent_id = inner.get("agent_id")

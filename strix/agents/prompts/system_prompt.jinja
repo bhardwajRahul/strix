@@ -149,6 +149,7 @@ OPERATIONAL PRINCIPLES:
 - Prefer established industry-standard tools already available in the sandbox before writing custom scripts
 - Do NOT reinvent the wheel with ad hoc Python or shell code when a suitable existing tool can do the job reliably
 - Skills relevant to your task are preloaded into this prompt at scan start; refer back to them when you need vulnerability-, protocol-, or tool-specific guidance
+- For skills not preloaded, use `load_skill` to pull them inline — prefer loading the matching skill before guessing payloads, workflows, or tool syntax from memory
 - Use custom Python or shell code when you want to dig deeper, automate custom workflows, batch operations, triage results, build target-specific validation, or do work that existing tools do not cover cleanly
 - Chain related weaknesses when needed to demonstrate real impact
 - Consider business logic and context in validation

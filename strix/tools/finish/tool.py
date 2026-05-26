@@ -26,9 +26,10 @@ def _do_finish(
     if parent_id is not None:
         return {
             "success": False,
-            "error": "finish_scan_wrong_agent",
-            "message": "This tool can only be used by the root/main agent",
-            "suggestion": "If you are a subagent, use agent_finish instead",
+            "error": (
+                "This tool can only be used by the root/main agent. "
+                "If you are a subagent, use agent_finish instead"
+            ),
         }
 
     errors: list[str] = []
@@ -41,7 +42,7 @@ def _do_finish(
     if not recommendations.strip():
         errors.append("Recommendations cannot be empty")
     if errors:
-        return {"success": False, "message": "Validation failed", "errors": errors}
+        return {"success": False, "error": "Validation failed", "errors": errors}
 
     try:
         from strix.report.state import get_global_report_state
@@ -64,7 +65,7 @@ def _do_finish(
         vuln_count = len(report_state.vulnerability_reports)
     except (ImportError, AttributeError) as e:
         logger.exception("finish_scan persistence failed")
-        return {"success": False, "message": f"Failed to complete scan: {e!s}"}
+        return {"success": False, "error": f"Failed to complete scan: {e!s}"}
     else:
         logger.info(
             "finish_scan: completed scan with %d vulnerability report(s)",
@@ -159,10 +160,9 @@ async def finish_scan(
             {
                 "success": False,
                 "scan_completed": False,
-                "error": "active_agents_remaining",
-                "message": (
+                "error": (
                     "Cannot finish scan while child agents are still active. "
-                    "Wait for completion, send them finish instructions, or stop them first."
+                    "Wait for completion, send them finish instructions, or stop them first"
                 ),
                 "active_agents": active_agents,
             },

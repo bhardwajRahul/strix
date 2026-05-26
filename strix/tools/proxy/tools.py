@@ -453,7 +453,7 @@ async def list_sitemap(
     Workflow:
     - Start with no ``parent_id`` to list root domains (scoped by
       ``scope_id`` if you only care about in-scope hosts).
-    - Pick an entry where ``hasDescendants=true`` and pass its ``id``
+    - Pick an entry where ``has_descendants=true`` and pass its ``id``
       as ``parent_id`` to drill in. ``depth="DIRECT"`` returns only
       immediate children; ``"ALL"`` flattens the full subtree.
     - Hand any ``id`` to ``view_sitemap_entry`` for the full record
@@ -575,7 +575,7 @@ async def scope_rules(
         if action == "get":
             if not scope_id:
                 return json.dumps(
-                    {"success": False, "error": "scope_id required for get"},
+                    {"success": False, "error": "Scope_id is required for action='get'"},
                     ensure_ascii=False,
                     default=str,
                 )
@@ -586,7 +586,7 @@ async def scope_rules(
         if action == "create":
             if not scope_name:
                 return json.dumps(
-                    {"success": False, "error": "scope_name required for create"},
+                    {"success": False, "error": "Scope_name is required for action='create'"},
                     ensure_ascii=False,
                     default=str,
                 )
@@ -601,7 +601,7 @@ async def scope_rules(
                 return json.dumps(
                     {
                         "success": False,
-                        "error": "scope_id and scope_name required for update",
+                        "error": "Scope_id and scope_name are required for action='update'",
                     },
                     ensure_ascii=False,
                     default=str,
@@ -615,11 +615,19 @@ async def scope_rules(
         # action == "delete" — exhaustive Literal
         if not scope_id:
             return json.dumps(
-                {"success": False, "error": "scope_id required for delete"},
+                {"success": False, "error": "Scope_id is required for action='delete'"},
                 ensure_ascii=False,
                 default=str,
             )
         await caido_api.scope_delete(client, scope_id)
-        return json.dumps({"success": True, "deleted": scope_id}, ensure_ascii=False, default=str)
+        return json.dumps(
+            {
+                "success": True,
+                "deleted": scope_id,
+                "message": f"Scope {scope_id} deleted",
+            },
+            ensure_ascii=False,
+            default=str,
+        )
     except Exception as exc:  # noqa: BLE001
         return _err("scope_rules", exc)

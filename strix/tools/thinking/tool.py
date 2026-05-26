@@ -33,5 +33,5 @@ async def think(thought: str) -> str:
         thought: The reasoning to record. Must be non-empty.
     """
     if not thought or not thought.strip():
-        return json.dumps({"success": False, "message": "Thought cannot be empty"})
+        return json.dumps({"success": False, "error": "Thought cannot be empty"})
     return json.dumps({"success": True, "message": "Thought recorded"})

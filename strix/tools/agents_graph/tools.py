@@ -5,6 +5,8 @@
 - ``wait_for_message``: pause this agent until a message arrives or
   ``timeout_seconds`` elapses.
 - ``create_agent``: asks the scan runner to spawn an addressable child.
+- ``stop_agent``: cancel a running agent (optionally cascading to its
+  descendants).
 - ``agent_finish``: subagents only — posts a structured completion
   report to the parent's SDK session and returns a final-output marker.
 """
@@ -94,7 +96,7 @@ async def view_agent_graph(ctx: RunContextWrapper) -> str:
     me = inner.get("agent_id")
     if coordinator is None:
         return json.dumps(
-            {"success": False, "error": "Agent coordinator not initialized in context."},
+            {"success": False, "error": "Agent coordinator not initialized in context"},
             ensure_ascii=False,
             default=str,
         )
@@ -172,7 +174,7 @@ async def send_message_to_agent(
     me = inner.get("agent_id")
     if coordinator is None or me is None:
         return json.dumps(
-            {"success": False, "error": "Agent coordinator or agent_id missing in context."},
+            {"success": False, "error": "Agent coordinator or agent_id missing in context"},
             ensure_ascii=False,
             default=str,
         )
@@ -181,8 +183,8 @@ async def send_message_to_agent(
             {
                 "success": False,
                 "error": (
-                    "Cannot send a message to yourself. Use `think` to record a "
-                    "private note, or `agent_finish` / `finish_scan` to terminate."
+                    "Cannot send a message to yourself; use `think` to record a "
+                    "private note, or `agent_finish` / `finish_scan` to terminate"
                 ),
             },
             ensure_ascii=False,
@@ -204,7 +206,7 @@ async def send_message_to_agent(
         return json.dumps(
             {
                 "success": False,
-                "error": f"Target agent '{target_agent_id}' not found or message delivery failed.",
+                "error": f"Target agent '{target_agent_id}' not found or message delivery failed",
             },
             ensure_ascii=False,
             default=str,
@@ -271,7 +273,7 @@ async def wait_for_message(  # noqa: PLR0911
     interactive = bool(inner.get("interactive", False))
     if coordinator is None or me is None:
         return json.dumps(
-            {"success": False, "error": "Agent coordinator or agent_id missing in context."},
+            {"success": False, "error": "Agent coordinator or agent_id missing in context"},
             ensure_ascii=False,
             default=str,
         )
@@ -410,7 +412,8 @@ async def create_agent(
         inherit_context: Default ``True``. The child receives the
             parent's input history as background; only set ``False``
             when starting a clean-slate task.
-        skills: Comma-separated skill names. Max 5; prefer 1-3.
+        skills: List of skill names (e.g. ``["xss", "sql_injection"]``).
+            Max 5; prefer 1-3.
     """
     inner = _ctx(ctx)
     coordinator = coordinator_from_context(inner)
@@ -419,7 +422,7 @@ async def create_agent(
 
     if coordinator is None or parent_id is None:
         return json.dumps(
-            {"success": False, "error": "Agent coordinator or agent_id missing in context."},
+            {"success": False, "error": "Agent coordinator or agent_id missing in context"},
             ensure_ascii=False,
             default=str,
         )
@@ -427,7 +430,7 @@ async def create_agent(
         return json.dumps(
             {
                 "success": False,
-                "error": "Scan runner did not provide a child-agent spawner in context.",
+                "error": "Scan runner did not provide a child-agent spawner in context",
             },
             ensure_ascii=False,
             default=str,
@@ -525,7 +528,7 @@ async def agent_finish(
     me = inner.get("agent_id")
     if coordinator is None or me is None:
         return json.dumps(
-            {"success": False, "error": "Agent coordinator or agent_id missing in context."},
+            {"success": False, "error": "Agent coordinator or agent_id missing in context"},
             ensure_ascii=False,
             default=str,
         )
@@ -536,7 +539,7 @@ async def agent_finish(
             {
                 "success": False,
                 "error": (
-                    "agent_finish is for subagents. Root/main agents must call finish_scan instead."
+                    "agent_finish is for subagents. Root/main agents must call finish_scan instead"
                 ),
             },
             ensure_ascii=False,
@@ -625,7 +628,7 @@ async def stop_agent(
     me = inner.get("agent_id")
     if coordinator is None or me is None:
         return json.dumps(
-            {"success": False, "error": "Agent coordinator or agent_id missing in context."},
+            {"success": False, "error": "Agent coordinator or agent_id missing in context"},
             ensure_ascii=False,
             default=str,
         )
@@ -633,7 +636,7 @@ async def stop_agent(
         return json.dumps(
             {
                 "success": False,
-                "error": "Cannot stop yourself; call agent_finish or finish_scan instead.",
+                "error": "Cannot stop yourself; call agent_finish or finish_scan instead",
             },
             ensure_ascii=False,
             default=str,
@@ -653,10 +656,10 @@ async def stop_agent(
                 "success": False,
                 "error": (
                     f"Agent {target_agent_id} is already '{current_status}'; "
-                    "stop_agent only acts on running/waiting agents. Use "
+                    "stop_agent only acts on running/waiting agents — use "
                     "view_agent_graph to find still-active descendants and "
                     "stop them individually, or send_message_to_agent if you "
-                    "want to wake this one with new instructions."
+                    "want to wake this one with new instructions"
                 ),
                 "target_agent_id": target_agent_id,
                 "current_status": current_status,
