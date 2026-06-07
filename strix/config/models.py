@@ -99,3 +99,17 @@ def uses_chat_completions_tool_schema(model_name: str, settings: Settings) -> bo
     if model.startswith(("litellm/", "any-llm/")):
         return True
     return bool(settings.llm.api_base)
+
+
+def model_supports_reasoning(model_name: str) -> bool:
+    import litellm
+
+    name = model_name.strip().lower()
+    for prefix in ("litellm/", "any-llm/"):
+        if name.startswith(prefix):
+            name = name[len(prefix) :]
+            break
+    entry = litellm.model_cost.get(name)
+    if entry is None and "/" in name:
+        entry = litellm.model_cost.get(name.rsplit("/", 1)[1])
+    return bool(entry and entry.get("supports_reasoning"))
