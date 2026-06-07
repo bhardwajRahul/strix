@@ -663,9 +663,9 @@ class QuitScreen(ModalScreen):  # type: ignore[misc]
             self.app.pop_screen()
             event.prevent_default()
 
-    def on_button_pressed(self, event: Button.Pressed) -> None:
+    async def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "quit":
-            self.app.action_custom_quit()
+            await self.app.action_custom_quit()
         else:
             self.app.pop_screen()
 
@@ -751,6 +751,7 @@ class StrixTUIApp(App):  # type: ignore[misc]
             self.report_state.cleanup()
 
         def signal_handler(_signum: int, _frame: Any) -> None:
+            self._teardown_sandbox_blocking(timeout=10.0)
             self.report_state.cleanup(status="interrupted")
             sys.exit(0)
 
@@ -1632,9 +1633,9 @@ class StrixTUIApp(App):  # type: ignore[misc]
 
         self.push_screen(HelpScreen())
 
-    def action_request_quit(self) -> None:
+    async def action_request_quit(self) -> None:
         if self.show_splash or not self.is_mounted:
-            self.action_custom_quit()
+            await self.action_custom_quit()
             return
 
         if len(self.screen_stack) > 1:
@@ -1643,7 +1644,7 @@ class StrixTUIApp(App):  # type: ignore[misc]
         try:
             self.query_one("#main_container")
         except (ValueError, Exception):
-            self.action_custom_quit()
+            await self.action_custom_quit()
             return
 
         self.push_screen(QuitScreen())
@@ -1703,15 +1704,37 @@ class StrixTUIApp(App):  # type: ignore[misc]
             self._scan_loop,
         )
 
-    def action_custom_quit(self) -> None:
+    async def action_custom_quit(self) -> None:
+        await asyncio.to_thread(self._teardown_sandbox_blocking, timeout=10.0)
+
         if self._scan_thread and self._scan_thread.is_alive():
             self._scan_stop_event.set()
-
-            self._scan_thread.join(timeout=1.0)
+            self._scan_thread.join(timeout=2.0)
 
         self.report_state.cleanup()
 
         self.exit()
+
+    def _teardown_sandbox_blocking(self, *, timeout: float) -> None:
+        loop = self._scan_loop
+        if loop is None or loop.is_closed():
+            return
+        run_name = self.scan_config.get("run_name")
+        if not run_name:
+            return
+        future = asyncio.run_coroutine_threadsafe(
+            session_manager.cleanup(run_name),
+            loop,
+        )
+        try:
+            future.result(timeout=timeout)
+        except TimeoutError:
+            logger.warning(
+                "Sandbox cleanup timed out after %.1fs; container may still be running",
+                timeout,
+            )
+        except Exception:
+            logger.exception("Sandbox cleanup failed")
 
     def _is_widget_safe(self, widget: Any) -> bool:
         try:
