@@ -16,7 +16,7 @@ from docker import errors as docker_errors  # type: ignore[import-untyped, unuse
 from openai import APIError
 
 from strix.core.inputs import child_initial_input
-from strix.core.sessions import open_agent_session, strip_latest_image_from_session
+from strix.core.sessions import open_agent_session, strip_all_images_from_session
 
 
 if TYPE_CHECKING:
@@ -384,14 +384,14 @@ async def _run_cycle(  # noqa: PLR0912, PLR0915
                 and getattr(exc, "status_code", None) in _INPUT_REJECTION_CODES
             ):
                 try:
-                    stripped = await strip_latest_image_from_session(session)
+                    stripped = await strip_all_images_from_session(session)
                 except Exception:
                     logger.exception("image-strip recovery failed for %s", agent_id)
                     stripped = False
                 if stripped:
                     image_strips += 1
                     logger.info(
-                        "Stripped latest image from %s session after rejection; retrying (%d)",
+                        "Stripped images from %s session after rejection; retrying (%d)",
                         agent_id,
                         image_strips,
                     )
