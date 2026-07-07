@@ -44,6 +44,7 @@ from strix.interface.utils import (
     infer_target_type,
     is_whitebox_scan,
     process_pull_line,
+    read_target_list_file,
     resolve_diff_scope_context,
     rewrite_localhost_targets,
     validate_config_file,
@@ -344,6 +345,9 @@ Examples:
   strix --target https://github.com/user/repo --target https://example.com
   strix --target ./my-project --target https://staging.example.com --target https://prod.example.com
 
+  # Targets from a file, one target per non-empty, non-comment line
+  strix --target-list ./targets.txt
+
   # Custom instructions (inline)
   strix --target example.com --instruction "Focus on authentication vulnerabilities"
 
@@ -367,7 +371,15 @@ Examples:
         action="append",
         help="Target to test (URL, repository, local directory path, domain name, or IP address). "
         "Can be specified multiple times for multi-target scans. "
-        "Required for fresh runs; loaded from disk when ``--resume`` is set.",
+        "Fresh runs require at least one of --target, --target-list, or --mount.",
+    )
+    parser.add_argument(
+        "--target-list",
+        type=str,
+        action="append",
+        metavar="PATH",
+        help="Path to a file containing targets, one per non-empty, non-comment line. "
+        "Can be specified multiple times and combined with --target.",
     )
     parser.add_argument(
         "--mount",
@@ -488,10 +500,11 @@ Examples:
     args.user_explicit_instruction = args.instruction if args.resume else None
 
     if args.resume:
-        if args.target or args.mount:
+        if args.target or args.target_list or args.mount:
             parser.error(
-                "Cannot combine --resume with --target/--mount. --resume picks up where "
-                "the prior run left off, including the original target list."
+                "Cannot combine --resume with --target/--target-list/--mount. "
+                "--resume picks up where the prior run left off, including the "
+                "original target list."
             )
         _load_resume_state(args, parser)
         agents_path = runtime_state_dir(run_dir_for(args.resume)) / "agents.json"
@@ -503,13 +516,20 @@ Examples:
                 f"or remove --resume to start over with the same targets."
             )
     else:
-        if not args.target and not args.mount:
+        if not args.target and not args.target_list and not args.mount:
             parser.error(
-                "the following arguments are required: -t/--target or --mount "
+                "the following arguments are required: -t/--target, --target-list, or --mount "
                 "(or use --resume <run_name> to continue a prior scan)"
             )
         args.targets_info = []
-        for target in args.target or []:
+        targets = list(args.target or [])
+        for target_list_path in args.target_list or []:
+            try:
+                targets.extend(read_target_list_file(target_list_path))
+            except ValueError as e:
+                parser.error(str(e))
+
+        for target in targets:
             try:
                 target_type, target_dict = infer_target_type(target)
 
