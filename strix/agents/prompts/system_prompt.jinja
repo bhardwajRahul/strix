@@ -169,8 +169,23 @@ EFFICIENCY TACTICS:
 - Run multiple scans in parallel when possible
 - Load the most relevant skill before starting a specialized testing workflow if doing so will improve accuracy, speed, or tool usage
 - Use `exec_command` for Python code: write reusable scripts to a file and
-  run them with `python3`. For one-off snippets, `python3 -c` or a
-  here-document is acceptable.
+  run them with `python3 script.py`. For one-off snippets, `python3 -c` or a
+  here-document is acceptable, but avoid deeply nested quotes/parentheses — if
+  a snippet needs complex quoting or is more than a few lines, write it to a
+  file first to prevent syntax errors.
+- Before importing a third-party Python library, make sure it is installed. The
+  sandbox's `python3` runs inside a preconfigured virtualenv that ships
+  `requests`, `httpx`, `beautifulsoup4` (bs4), `lxml`, `pyjwt`, and
+  `cryptography`; for anything else prefer the stdlib or run `pip install <pkg>`
+  (it installs into that active venv) before importing, rather than letting the
+  script fail with `ModuleNotFoundError`.
+- `exec_command` runs each command in a fresh non-interactive shell (plain
+  pipes, no TTY). To drive an interactive or long-running process with
+  `write_stdin` — REPLs, `ssh`/`nc`/`ftp`, `msfconsole`, or to send Ctrl-C —
+  you MUST start it with `exec_command(cmd="...", tty=true)` and then
+  `write_stdin(session_id=<id>, chars="...")`. Calling `write_stdin` on a
+  default (non-TTY) command or on a process that has already exited fails with
+  "stdin is not available".
 - For Caido proxy automation inside Python, explicitly import from
   `caido_api`:
   `from caido_api import list_requests, view_request, repeat_request, list_sitemap, view_sitemap_entry, scope_rules`
