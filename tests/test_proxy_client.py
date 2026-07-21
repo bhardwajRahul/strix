@@ -166,6 +166,22 @@ def test_build_raw_request_recomputes_content_length_for_modified_body() -> None
     assert _headers_named(raw, "Content-Length") == [str(len(body.encode("utf-8")))]
 
 
+def test_build_raw_request_drops_transfer_encoding_for_modified_body() -> None:
+    body = '{"user":"updated"}'
+    _conn, raw = caido_api.build_raw_request(
+        method="POST",
+        url="https://example.com/login",
+        headers={
+            "tRaNsFeR-EnCoDiNg": "chunked",
+            "Content-Length": "7",
+            "Content-Type": "application/json",
+        },
+        body=body,
+    )
+    assert _headers_named(raw, "Transfer-Encoding") == []
+    assert _headers_named(raw, "Content-Length") == [str(len(body.encode("utf-8")))]
+
+
 def test_build_raw_request_drops_stale_content_length_for_empty_body() -> None:
     # A body cleared to empty must not keep the inherited (non-zero) length.
     _conn, raw = caido_api.build_raw_request(
