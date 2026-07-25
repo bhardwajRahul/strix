@@ -199,12 +199,43 @@ def _custom_tool_as_function_tool(tool: CustomTool) -> FunctionTool:
     )
 
 
-def _configure_chat_completions_filesystem_tools(toolset: Any) -> None:
+def _bound_custom_tool(tool: CustomTool) -> CustomTool:
+    """Bound a native ``CustomTool`` result in place.
+
+    Chat-completions mode converts filesystem ``CustomTool``s to ``FunctionTool``s
+    (which bounds the result), but the Responses path keeps them native, so a
+    large ``read_file``/directory listing would otherwise append unbounded text
+    to history. Wrap ``on_invoke_tool`` so the same head+tail bound applies.
+    """
+    invoke_tool = tool.on_invoke_tool
+
+    async def invoke(ctx: Any, raw_input: str) -> Any:
+        return _bound_result(await invoke_tool(ctx, raw_input))
+
+    tool.on_invoke_tool = invoke
+    return tool
+
+
+def _configure_filesystem_tools(toolset: Any, *, chat_completions: bool) -> None:
     for name, tool in vars(toolset).items():
-        if isinstance(tool, CustomTool):
-            setattr(toolset, name, _custom_tool_as_function_tool(tool))
+        if chat_completions:
+            if isinstance(tool, CustomTool):
+                setattr(toolset, name, _custom_tool_as_function_tool(tool))
+            elif isinstance(tool, FunctionTool):
+                setattr(toolset, name, _function_tool_with_error_result(tool))
+        # Responses-API path: keep tools native but still bound their output so
+        # filesystem reads can't exhaust the context window on later turns.
+        elif isinstance(tool, CustomTool):
+            setattr(toolset, name, _bound_custom_tool(tool))
         elif isinstance(tool, FunctionTool):
-            setattr(toolset, name, _function_tool_with_error_result(tool))
+            setattr(toolset, name, _with_bounded_result(tool))
+
+
+def _make_filesystem_configurator(*, chat_completions: bool) -> Any:
+    def configure(toolset: Any) -> None:
+        _configure_filesystem_tools(toolset, chat_completions=chat_completions)
+
+    return configure
 
 
 _CHARS_ESCAPE_RE = re.compile(r"\\(?:u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2}|[0abtnvfr\\])")
@@ -523,8 +554,8 @@ def build_strix_agent(
         model=None,
         capabilities=[
             Filesystem(
-                configure_tools=(
-                    _configure_chat_completions_filesystem_tools if chat_completions_tools else None
+                configure_tools=_make_filesystem_configurator(
+                    chat_completions=chat_completions_tools,
                 ),
             ),
             Shell(
