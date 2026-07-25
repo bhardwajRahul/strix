@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from strix.tools.output_store import bound_text
 
 
@@ -44,3 +46,18 @@ def test_notice_reports_dropped_counts() -> None:
 
     assert "lines" in bounded
     assert "bytes" in bounded
+
+
+def test_dropped_line_count_accounts_for_byte_trimming() -> None:
+    # A tight byte budget forces the byte pass to drop whole lines from the
+    # head/tail slices; the notice must count those, not just the middle.
+    text = "\n".join(f"line-{i}" for i in range(200))
+    bounded = bound_text(text, max_lines=20, max_bytes=40)
+
+    match = re.search(r"\[\.\.\. (\d+) lines", bounded)
+    assert match is not None, bounded
+    dropped = int(match.group(1))
+    kept = [ln for ln in bounded.splitlines() if ln and "truncated" not in ln]
+    assert dropped == 200 - len(kept)
+    # The naive middle-only count (max_lines split evenly) would under-report.
+    assert dropped > 200 - 20

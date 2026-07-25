@@ -66,7 +66,11 @@ def bound_text(text: str, *, max_lines: int, max_bytes: int) -> str:
     if tail and _byte_len(tail) > half_bytes:
         tail = _take_suffix(tail, half_bytes)
 
-    dropped_lines = max(0, len(lines) - head_lines - tail_lines)
+    # Count kept lines from the final slices: the byte pass above may have
+    # dropped whole lines from head/tail, so deriving this from the original
+    # head_lines/tail_lines would undercount what was actually removed.
+    kept_lines = len(head.split("\n")) + (len(tail.split("\n")) if tail else 0)
+    dropped_lines = max(0, len(lines) - kept_lines)
     dropped_bytes = max(0, total_bytes - _byte_len(head) - _byte_len(tail))
     notice = _TRUNCATION_NOTICE.format(lines=dropped_lines, bytes=dropped_bytes)
     return f"{head}\n\n{notice}\n\n{tail}" if tail else f"{head}\n\n{notice}"

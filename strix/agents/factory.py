@@ -246,12 +246,18 @@ def _format_validation_error(tool_name: str, exc: ValidationError) -> str:
 
 
 def _apply_shell_output_cap(parsed: dict[str, Any]) -> None:
-    """Default the SDK shell tools' own token cap so a single command can't
-    dump unbounded output into history. The SDK truncates head+tail when the
-    model omits the field; respect an explicit model-supplied value.
+    """Bound the SDK shell tools' own token cap so a single command can't dump
+    unbounded output into history. The SDK truncates head+tail from this value.
+
+    The configured cap is a ceiling: a missing value defaults to it, and a
+    larger model-supplied value is clamped down to it. A smaller explicit value
+    is respected, so the model can still ask for less.
     """
-    if parsed.get("max_output_tokens") is None:
-        parsed["max_output_tokens"] = load_settings().context.tool_output_max_tokens
+    ceiling = load_settings().context.tool_output_max_tokens
+    requested = parsed.get("max_output_tokens")
+    parsed["max_output_tokens"] = (
+        ceiling if not isinstance(requested, int) or requested > ceiling else requested
+    )
 
 
 def _wrap_exec_command(tool: FunctionTool) -> FunctionTool:

@@ -41,7 +41,7 @@ async def test_wrap_exec_command_defaults_shell_to_bash() -> None:
 
 
 @pytest.mark.asyncio
-async def test_wrap_exec_command_preserves_explicit_output_cap() -> None:
+async def test_wrap_exec_command_preserves_smaller_explicit_output_cap() -> None:
     captured: dict[str, str] = {}
     wrapped = factory._wrap_exec_command(_capturing_exec_tool(captured))
 
@@ -50,6 +50,20 @@ async def test_wrap_exec_command_preserves_explicit_output_cap() -> None:
     )
 
     assert json.loads(captured["raw_input"])["max_output_tokens"] == 42
+
+
+@pytest.mark.asyncio
+async def test_wrap_exec_command_clamps_oversized_explicit_output_cap() -> None:
+    captured: dict[str, str] = {}
+    wrapped = factory._wrap_exec_command(_capturing_exec_tool(captured))
+    ceiling = load_settings().context.tool_output_max_tokens
+
+    await wrapped.on_invoke_tool(
+        cast("Any", None),
+        json.dumps({"cmd": "echo hi", "max_output_tokens": ceiling * 100}),
+    )
+
+    assert json.loads(captured["raw_input"])["max_output_tokens"] == ceiling
 
 
 @pytest.mark.asyncio
