@@ -55,6 +55,23 @@ class DedupeSettings(BaseSettings):
     api_base: str | None = Field(default=None, alias="DEDUPE_LLM_API_BASE")
 
 
+class ContextSettings(BaseSettings):
+    """Context-window management: per-tool-output caps and history compaction."""
+
+    model_config = _BASE_CONFIG
+
+    auto_compact: bool = Field(default=True, alias="STRIX_CONTEXT_AUTO_COMPACT")
+    compact_buffer_tokens: int = Field(default=20_000, gt=0, alias="STRIX_CONTEXT_BUFFER_TOKENS")
+    keep_tokens: int = Field(default=8_000, gt=0, alias="STRIX_CONTEXT_KEEP_TOKENS")
+    fallback_context_tokens: int = Field(
+        default=200_000, gt=0, alias="STRIX_CONTEXT_FALLBACK_TOKENS"
+    )
+    summary_max_tokens: int = Field(default=4_096, gt=0, alias="STRIX_CONTEXT_SUMMARY_TOKENS")
+    tool_output_max_tokens: int = Field(default=8_000, gt=0, alias="STRIX_TOOL_OUTPUT_MAX_TOKENS")
+    tool_output_max_lines: int = Field(default=2_000, gt=0, alias="STRIX_TOOL_OUTPUT_MAX_LINES")
+    tool_output_max_bytes: int = Field(default=50 * 1024, gt=0, alias="STRIX_TOOL_OUTPUT_MAX_BYTES")
+
+
 class RuntimeSettings(BaseSettings):
     model_config = _BASE_CONFIG
 
@@ -99,6 +116,7 @@ class Settings(BaseSettings):
     llm: LlmSettings = Field(default_factory=LlmSettings)
     dedupe: DedupeSettings = Field(default_factory=DedupeSettings)
     runtime: RuntimeSettings = Field(default_factory=RuntimeSettings)
+    context: ContextSettings = Field(default_factory=ContextSettings)
     telemetry: TelemetrySettings = Field(default_factory=TelemetrySettings)
     integrations: IntegrationSettings = Field(default_factory=IntegrationSettings)
     viewer: ViewerSettings = Field(default_factory=ViewerSettings)

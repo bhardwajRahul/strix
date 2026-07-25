@@ -16,6 +16,7 @@ from agents.tool import CustomTool, FunctionTool, Tool
 from pydantic import ValidationError
 
 from strix.agents.prompt import render_system_prompt
+from strix.config import load_settings
 from strix.tools.agents_graph.tools import (
     agent_finish,
     create_agent,
@@ -33,6 +34,7 @@ from strix.tools.notes.tools import (
     list_notes,
     update_note,
 )
+from strix.tools.output_store import bound_text
 from strix.tools.proxy.tools import (
     list_requests,
     list_sitemap,
@@ -108,8 +110,41 @@ def _extract_custom_input(tool: CustomTool, raw_input: str | dict[str, Any]) -> 
     return value if isinstance(value, str) else ""
 
 
+def _tool_output_limits() -> tuple[int, int]:
+    context = load_settings().context
+    return context.tool_output_max_lines, context.tool_output_max_bytes
+
+
+def _bound_result(result: Any) -> Any:
+    if not isinstance(result, str):
+        return result
+    max_lines, max_bytes = _tool_output_limits()
+    return bound_text(result, max_lines=max_lines, max_bytes=max_bytes)
+
+
 def _format_tool_error(exc: Exception) -> str:
-    return str(exc) or exc.__class__.__name__
+    message = str(exc) or exc.__class__.__name__
+    max_lines, max_bytes = _tool_output_limits()
+    return bound_text(message, max_lines=max_lines, max_bytes=max_bytes)
+
+
+def _with_bounded_result(tool: FunctionTool) -> FunctionTool:
+    """Cap the size of a tool's result before it enters agent history.
+
+    Idempotent: base tools are shared singletons reused across every agent, so
+    the guard prevents stacking the wrapper on repeated ``build_strix_agent``
+    calls.
+    """
+    if getattr(tool, "_strix_bounded", False):
+        return tool
+    invoke_tool = tool.on_invoke_tool
+
+    async def invoke(ctx: Any, raw_input: str) -> Any:
+        return _bound_result(await invoke_tool(ctx, raw_input))
+
+    tool.on_invoke_tool = invoke
+    tool._strix_bounded = True  # type: ignore[attr-defined]
+    return tool
 
 
 def _function_tool_with_error_result(tool: FunctionTool) -> FunctionTool:
@@ -117,7 +152,7 @@ def _function_tool_with_error_result(tool: FunctionTool) -> FunctionTool:
 
     async def invoke(ctx: Any, raw_input: str) -> Any:
         try:
-            return await invoke_tool(ctx, raw_input)
+            return _bound_result(await invoke_tool(ctx, raw_input))
         except Exception as exc:  # noqa: BLE001 - tool errors should be model-visible results.
             logger.debug("Tool %s failed; returning error as result", tool.name, exc_info=True)
             return _format_tool_error(exc)
@@ -132,7 +167,7 @@ def _custom_tool_as_function_tool(tool: CustomTool) -> FunctionTool:
         if not custom_input:
             return f"`{_custom_tool_input_field(tool)}` must be a non-empty string."
         try:
-            return await tool.on_invoke_tool(ctx, custom_input)
+            return _bound_result(await tool.on_invoke_tool(ctx, custom_input))
         except Exception as exc:  # noqa: BLE001 - matches SDK CustomTool error-as-result behavior.
             logger.debug("Tool %s failed; returning error as result", tool.name, exc_info=True)
             return _format_tool_error(exc)
@@ -210,6 +245,15 @@ def _format_validation_error(tool_name: str, exc: ValidationError) -> str:
     return f"{tool_name}: invalid arguments — " + "; ".join(parts)
 
 
+def _apply_shell_output_cap(parsed: dict[str, Any]) -> None:
+    """Default the SDK shell tools' own token cap so a single command can't
+    dump unbounded output into history. The SDK truncates head+tail when the
+    model omits the field; respect an explicit model-supplied value.
+    """
+    if parsed.get("max_output_tokens") is None:
+        parsed["max_output_tokens"] = load_settings().context.tool_output_max_tokens
+
+
 def _wrap_exec_command(tool: FunctionTool) -> FunctionTool:
     invoke_tool = tool.on_invoke_tool
 
@@ -218,8 +262,10 @@ def _wrap_exec_command(tool: FunctionTool) -> FunctionTool:
             parsed = json.loads(raw_input)
         except (json.JSONDecodeError, TypeError):
             parsed = None
-        if isinstance(parsed, dict) and "shell" not in parsed:
-            parsed["shell"] = "bash"
+        if isinstance(parsed, dict):
+            if "shell" not in parsed:
+                parsed["shell"] = "bash"
+            _apply_shell_output_cap(parsed)
             raw_input = json.dumps(parsed)
         try:
             return await invoke_tool(ctx, raw_input)
@@ -245,8 +291,10 @@ def _wrap_write_stdin(tool: FunctionTool) -> FunctionTool:
             parsed = json.loads(raw_input)
         except json.JSONDecodeError:
             parsed = None
-        if isinstance(parsed, dict) and isinstance(parsed.get("chars"), str):
-            parsed["chars"] = _decode_chars_escape(parsed["chars"])
+        if isinstance(parsed, dict):
+            if isinstance(parsed.get("chars"), str):
+                parsed["chars"] = _decode_chars_escape(parsed["chars"])
+            _apply_shell_output_cap(parsed)
             raw_input = json.dumps(parsed)
         try:
             return await invoke_tool(ctx, raw_input)
@@ -447,6 +495,9 @@ def build_strix_agent(
     else:
         tools = [*_BASE_TOOLS, *agent_tools, agent_finish]
     _ensure_unique_tool_names(tools)
+    tools = [
+        _with_bounded_result(tool) if isinstance(tool, FunctionTool) else tool for tool in tools
+    ]
 
     logger.info(
         "Built %s agent '%s' (skills=%d, tools=%d, scan_mode=%s, whitebox=%s)",
