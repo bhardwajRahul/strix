@@ -28,7 +28,9 @@ def test_byte_limit_enforced_on_single_long_line() -> None:
     bounded = bound_text(text, max_lines=2_000, max_bytes=1_000)
 
     assert "truncated" in bounded
-    assert len(bounded.encode("utf-8")) < 3_000
+    # The whole joined result (head + tail + notice + separators) honours the
+    # configured maximum, not just the head/tail slices.
+    assert len(bounded.encode("utf-8")) <= 1_000
 
 
 def test_multibyte_characters_not_split() -> None:

@@ -48,11 +48,20 @@ def bound_text(text: str, *, max_lines: int, max_bytes: int) -> str:
     Truncation happens on whichever limit is hit first (line count or UTF-8
     byte size). The removed middle is replaced with a notice recording how
     many lines and bytes were dropped so the agent knows output was elided.
+    ``max_bytes`` bounds the *entire* joined result, notice and separators
+    included.
     """
     lines = text.split("\n")
     total_bytes = _byte_len(text)
     if len(lines) <= max_lines and total_bytes <= max_bytes:
         return text
+
+    # Reserve room for the notice and its two blank-line separators so the
+    # head+tail slices can't consume the whole budget and push the persisted
+    # value over max_bytes. Upper-bound the notice with the largest possible
+    # counts; the real notice is never longer. ``+ 4`` covers the separators.
+    notice_overhead = _byte_len(_TRUNCATION_NOTICE.format(lines=len(lines), bytes=total_bytes)) + 4
+    byte_budget = max(2, max_bytes - notice_overhead)
 
     head_lines = max(1, max_lines // 2)
     tail_lines = max_lines - head_lines
@@ -60,7 +69,7 @@ def bound_text(text: str, *, max_lines: int, max_bytes: int) -> str:
     tail = "\n".join(lines[len(lines) - tail_lines :]) if tail_lines > 0 else ""
 
     # Enforce the byte budget even when the line count alone was fine.
-    half_bytes = max(1, max_bytes // 2)
+    half_bytes = max(1, byte_budget // 2)
     if _byte_len(head) > half_bytes:
         head = _take_prefix(head, half_bytes)
     if tail and _byte_len(tail) > half_bytes:
