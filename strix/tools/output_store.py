@@ -49,7 +49,8 @@ def bound_text(text: str, *, max_lines: int, max_bytes: int) -> str:
     byte size). The removed middle is replaced with a notice recording how
     many lines and bytes were dropped so the agent knows output was elided.
     ``max_bytes`` bounds the *entire* joined result, notice and separators
-    included.
+    included, and must be large enough to hold the notice itself (guaranteed by
+    the ``tool_output_max_bytes`` config floor).
     """
     lines = text.split("\n")
     total_bytes = _byte_len(text)
