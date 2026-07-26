@@ -13,7 +13,13 @@ from agents import RunConfig, Runner
 from agents.exceptions import AgentsException, MaxTurnsExceeded, UserError
 from agents.sandbox.errors import ExecTransportError
 from docker import errors as docker_errors  # type: ignore[import-untyped, unused-ignore]
-from openai import APIError
+from openai import (
+    APIConnectionError,
+    APIError,
+    APIStatusError,
+    APITimeoutError,
+    RateLimitError,
+)
 
 from strix.core.hooks import BudgetExceededError
 from strix.core.inputs import child_initial_input
@@ -76,6 +82,34 @@ async def _compact_session(
         tools_text=_agent_tools_text(agent),
         force=force,
     )
+
+
+_TRANSIENT_MODEL_STATUS_CODES = frozenset({408, 500, 502, 503, 504})
+_MAX_TRANSIENT_MODEL_RETRIES = 4
+_TRANSIENT_MODEL_RETRY_BASE_DELAY_S = 2.0
+_TRANSIENT_MODEL_RETRY_MAX_DELAY_S = 30.0
+
+
+def _model_error_status_code(exc: BaseException) -> int | None:
+    code = getattr(exc, "status_code", None)
+    return code if isinstance(code, int) else None
+
+
+def _is_transient_model_error(exc: BaseException) -> bool:
+    if isinstance(exc, RateLimitError):
+        return False
+    if isinstance(exc, APITimeoutError | APIConnectionError):
+        return True
+    if isinstance(exc, APIStatusError):
+        return exc.status_code in _TRANSIENT_MODEL_STATUS_CODES
+    if isinstance(exc, APIError):
+        return _model_error_status_code(exc) is None
+    return False
+
+
+def _transient_model_retry_delay(attempt: int) -> float:
+    delay = _TRANSIENT_MODEL_RETRY_BASE_DELAY_S * float(2 ** (attempt - 1))
+    return min(delay, _TRANSIENT_MODEL_RETRY_MAX_DELAY_S)
 
 
 async def run_agent_loop(
@@ -387,6 +421,7 @@ async def _run_cycle(  # noqa: PLR0912, PLR0915
 ) -> RunResultBase | None:
     image_strips = 0
     compactions = 0
+    model_retries = 0
     while True:
         try:
             await coordinator.mark_running(agent_id)
@@ -488,6 +523,22 @@ async def _run_cycle(  # noqa: PLR0912, PLR0915
                     )
                     input_data = []
                     continue
+            if model_retries < _MAX_TRANSIENT_MODEL_RETRIES and _is_transient_model_error(exc):
+                model_retries += 1
+                delay = _transient_model_retry_delay(model_retries)
+                logger.warning(
+                    "transient model/provider error for %s; replaying turn "
+                    "(attempt %d/%d, backoff %.1fs): %r",
+                    agent_id,
+                    model_retries,
+                    _MAX_TRANSIENT_MODEL_RETRIES,
+                    delay,
+                    exc,
+                )
+                await asyncio.sleep(delay)
+                if session is not None:
+                    input_data = []
+                continue
             if not interactive:
                 raise
             if isinstance(exc, MaxTurnsExceeded):
