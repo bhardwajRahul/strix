@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import contextlib
+import io
 import json
 import logging
 import uuid
 from collections.abc import Callable
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from agents import RunConfig
@@ -40,6 +42,10 @@ from strix.core.paths import run_dir_for, runtime_state_dir
 from strix.core.sessions import open_agent_session
 from strix.runtime import session_manager
 from strix.telemetry.logging import set_scan_id, setup_scan_logging
+from strix.tools.output_store import (
+    WORKSPACE_SPILL_DIR,
+    configure_spill_writer,
+)
 
 
 if TYPE_CHECKING:
@@ -202,6 +208,20 @@ async def run_strix_scan(
         local_sources=local_sources or [],
     )
     logger.info("Sandbox ready for scan %s", scan_id)
+
+    sandbox_session = bundle["session"]
+
+    async def _spill_to_workspace(output_id: str, text: str) -> str | None:
+        """Write an oversized tool result into the sandbox; return its path or None."""
+        path = f"{WORKSPACE_SPILL_DIR}/{output_id}.txt"
+        try:
+            await sandbox_session.write(Path(path), io.BytesIO(text.encode("utf-8")))
+        except Exception:
+            logger.exception("failed to spill tool output to sandbox workspace")
+            return None
+        return path
+
+    configure_spill_writer(_spill_to_workspace)
 
     sessions_to_close: list[SQLiteSession] = []
 
@@ -399,6 +419,7 @@ async def run_strix_scan(
                 await coordinator.set_status(root_id, "failed")
         raise
     finally:
+        configure_spill_writer(None)
         for s in sessions_to_close:
             with contextlib.suppress(Exception):
                 s.close()

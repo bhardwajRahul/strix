@@ -108,3 +108,10 @@ async def test_chat_completions_filesystem_custom_tool_becomes_function_tool() -
     factory._configure_filesystem_tools(toolset, chat_completions=True)
 
     assert isinstance(toolset.read_file, FunctionTool)
+
+
+def test_function_tools_are_result_bounded() -> None:
+    agent = factory.build_strix_agent(is_root=True)
+    by_name = {t.name: t for t in agent.tools}
+
+    assert getattr(by_name["think"], "_strix_bounded", False) is True
