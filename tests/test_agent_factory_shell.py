@@ -82,8 +82,6 @@ async def test_wrap_exec_command_preserves_explicit_shell(shell: str) -> None:
 
 @pytest.mark.asyncio
 async def test_responses_filesystem_custom_tool_output_is_bounded() -> None:
-    # In Responses-API mode filesystem tools stay native CustomTools; a large
-    # read must still be head+tail bounded before it enters history.
     async def invoke(_ctx: Any, _inp: str) -> str:
         return "line\n" * 50_000
 

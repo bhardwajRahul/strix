@@ -121,14 +121,7 @@ def test_read_json_overrides_uses_json_when_no_alias_in_environ(tmp_path: Path) 
     assert loader._read_json_overrides(path) == {"llm": {"api_key": "sk-file"}}
 
 
-# --------------------------------------------------------------------------- #
-# ContextSettings validation
-# --------------------------------------------------------------------------- #
-
-
 def test_tool_output_max_bytes_rejects_sub_notice_values() -> None:
-    # A ceiling below the truncation notice can't fit a bounded preview, so it
-    # is rejected at load time rather than producing over-cap persisted output.
     with pytest.raises(ValidationError):
         ContextSettings(STRIX_TOOL_OUTPUT_MAX_BYTES=64)
 

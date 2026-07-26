@@ -69,8 +69,7 @@ class ContextSettings(BaseSettings):
     summary_max_tokens: int = Field(default=4_096, gt=0, alias="STRIX_CONTEXT_SUMMARY_TOKENS")
     tool_output_max_tokens: int = Field(default=8_000, gt=0, alias="STRIX_TOOL_OUTPUT_MAX_TOKENS")
     tool_output_max_lines: int = Field(default=2_000, gt=0, alias="STRIX_TOOL_OUTPUT_MAX_LINES")
-    # Floor comfortably above the truncation-notice size so a preview
-    # (head+tail+notice) always fits within the configured ceiling.
+    # Floor above the truncation-notice size so a preview always fits.
     tool_output_max_bytes: int = Field(
         default=50 * 1024, ge=1024, alias="STRIX_TOOL_OUTPUT_MAX_BYTES"
     )

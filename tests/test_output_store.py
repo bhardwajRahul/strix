@@ -19,7 +19,6 @@ def test_line_limit_keeps_head_and_tail() -> None:
     assert bounded.startswith("0\n1\n2\n3\n4")
     assert bounded.rstrip().endswith("999")
     assert "truncated" in bounded
-    # Head + tail only, far fewer than the original 1000 lines.
     assert len(bounded.splitlines()) < 30
 
 
@@ -28,8 +27,6 @@ def test_byte_limit_enforced_on_single_long_line() -> None:
     bounded = bound_text(text, max_lines=2_000, max_bytes=1_000)
 
     assert "truncated" in bounded
-    # The whole joined result (head + tail + notice + separators) honours the
-    # configured maximum, not just the head/tail slices.
     assert len(bounded.encode("utf-8")) <= 1_000
 
 
@@ -37,7 +34,7 @@ def test_multibyte_characters_not_split() -> None:
     text = "😀" * 50_000
     bounded = bound_text(text, max_lines=2_000, max_bytes=1_000)
 
-    # Must remain valid UTF-8 (no broken surrogate halves from a mid-char cut).
+    # Must remain valid UTF-8 (no mid-character cut).
     assert bounded == bounded.encode("utf-8").decode("utf-8")
     assert "truncated" in bounded
 
@@ -51,8 +48,7 @@ def test_notice_reports_dropped_counts() -> None:
 
 
 def test_dropped_line_count_accounts_for_byte_trimming() -> None:
-    # A tight byte budget forces the byte pass to drop whole lines from the
-    # head/tail slices; the notice must count those, not just the middle.
+    # Tight byte budget drops whole lines from head/tail; the notice must count them.
     text = "\n".join(f"line-{i}" for i in range(200))
     bounded = bound_text(text, max_lines=20, max_bytes=40)
 
@@ -61,5 +57,4 @@ def test_dropped_line_count_accounts_for_byte_trimming() -> None:
     dropped = int(match.group(1))
     kept = [ln for ln in bounded.splitlines() if ln and "truncated" not in ln]
     assert dropped == 200 - len(kept)
-    # The naive middle-only count (max_lines split evenly) would under-report.
     assert dropped > 200 - 20
