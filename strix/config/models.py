@@ -429,3 +429,45 @@ def is_known_openai_bare_model(model_name: str) -> bool:
         return False
     entry = litellm.model_cost.get(name)
     return bool(entry and entry.get("litellm_provider") == "openai")
+
+
+def is_claude_model(model_name: str) -> bool:
+    return "claude" in (model_name or "").strip().lower()
+
+
+def is_bedrock_route(model_name: str) -> bool:
+    name = (model_name or "").strip().lower()
+    return name.startswith("bedrock/") or "anthropic." in name
+
+
+def _prompt_cache_name_candidates(model_name: str) -> list[str]:
+    # LiteLLM's model map keys the same model under several names; strip the
+    # route prefix, then leading dotted segments (region, provider).
+    name = (model_name or "").strip().lower()
+    for prefix in ("litellm/", "bedrock/"):
+        if name.startswith(prefix):
+            name = name[len(prefix) :]
+            break
+    candidates = [name]
+    rest = name
+    while "." in rest:
+        rest = rest.split(".", 1)[1]
+        candidates.append(rest)
+    return candidates
+
+
+def bedrock_route_supports_prompt_caching(model_name: str) -> bool:
+    # Bedrock rejects the cache marker for models LiteLLM's map doesn't
+    # recognise as cache-capable, so callers withhold it unless confirmed here.
+    import litellm
+
+    checker = getattr(getattr(litellm, "utils", None), "supports_prompt_caching", None)
+    for cand in _prompt_cache_name_candidates(model_name):
+        if checker is not None:
+            with contextlib.suppress(Exception):
+                if checker(cand):
+                    return True
+        entry = litellm.model_cost.get(cand)
+        if entry and entry.get("supports_prompt_caching"):
+            return True
+    return False
