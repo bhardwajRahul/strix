@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import urllib.error
 import urllib.request
 from typing import TYPE_CHECKING
@@ -84,6 +85,75 @@ def test_build_run_state_from_agents_json(tmp_path: Path) -> None:
     assert child["name"] == "recon"
     # No agents.db, so no message/tool events.
     assert state["events"] == []
+
+
+def test_build_run_state_keeps_same_call_id_separate_per_agent(tmp_path: Path) -> None:
+    run_dir = _make_run(tmp_path, "tools", status="completed", end_time=None)
+    agents_db = run_dir / ".state" / "agents.db"
+    rows = [
+        (
+            "root",
+            {
+                "type": "function_call",
+                "call_id": "exec_command_0",
+                "name": "exec_command",
+                "arguments": json.dumps({"cmd": "echo root"}),
+            },
+        ),
+        (
+            "root",
+            {
+                "type": "function_call_output",
+                "call_id": "exec_command_0",
+                "output": json.dumps({"success": True, "output": "root"}),
+            },
+        ),
+        (
+            "child",
+            {
+                "type": "function_call",
+                "call_id": "exec_command_0",
+                "name": "exec_command",
+                "arguments": json.dumps({"cmd": "echo child"}),
+            },
+        ),
+        (
+            "child",
+            {
+                "type": "function_call_output",
+                "call_id": "exec_command_0",
+                "output": json.dumps({"success": True, "output": "child"}),
+            },
+        ),
+    ]
+    with sqlite3.connect(agents_db) as conn:
+        conn.execute(
+            """
+            create table agent_messages (
+                id integer primary key,
+                session_id text not null,
+                message_data text not null,
+                created_at text not null
+            )
+            """
+        )
+        conn.executemany(
+            """
+            insert into agent_messages (session_id, message_data, created_at)
+            values (?, ?, '2026-01-01T00:00:00+00:00')
+            """,
+            [(agent_id, json.dumps(message)) for agent_id, message in rows],
+        )
+
+    state = build_run_state(run_dir)
+    tools = [event for event in state["events"] if event["type"] == "tool"]
+
+    assert len(tools) == 2
+    by_agent = {event["agent_id"]: event for event in tools}
+    assert by_agent["root"]["data"]["args"] == {"cmd": "echo root"}
+    assert by_agent["root"]["data"]["result"]["output"] == "root"
+    assert by_agent["child"]["data"]["args"] == {"cmd": "echo child"}
+    assert by_agent["child"]["data"]["result"]["output"] == "child"
 
 
 def _get(url: str, *, cookie: str | None = None) -> tuple[int, str, bytes]:
