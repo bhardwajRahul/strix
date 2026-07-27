@@ -210,7 +210,7 @@ def validate_environment() -> None:
             padding=(1, 2),
         )
 
-        logger.error("Missing required env vars: %s", missing_required_vars)
+        logger.debug("Missing required env vars: %s", missing_required_vars)
         console.print("\n")
         console.print(panel)
         console.print()
@@ -223,7 +223,7 @@ def validate_environment() -> None:
 
 def check_docker_installed() -> None:
     if shutil.which("docker") is None:
-        logger.error("Docker CLI not found in PATH")
+        logger.debug("Docker CLI not found in PATH")
         console = Console()
         error_text = Text()
         error_text.append("DOCKER NOT INSTALLED", style="bold red")
@@ -422,7 +422,7 @@ async def warm_up_llm(show_model_warning: bool = True) -> None:
             logger.info("LLM warm-up succeeded for dedupe model %s", dedupe_model)
 
     except Exception as e:
-        logger.exception("LLM warm-up failed")
+        logger.debug("LLM warm-up failed", exc_info=True)
         error_text = Text()
         sub_hint = _subscription_error_hint(e)
         if sub_hint is not None:
@@ -918,7 +918,7 @@ def pull_docker_image() -> None:
                 last_update = process_pull_line(line, layers_info, status, last_update)
 
         except DockerException as e:
-            logger.exception("Failed to pull docker image %s", image)
+            logger.debug("Failed to pull docker image %s", image, exc_info=True)
             console.print()
             error_text = Text()
             error_text.append("FAILED TO PULL IMAGE", style="bold red")
