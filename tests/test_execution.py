@@ -6,13 +6,21 @@ import asyncio
 import contextlib
 import json
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 from agents.memory import SQLiteSession
 from agents.tool_context import ToolContext
 
+from strix.config import codex
+from strix.core import execution
 from strix.core.agents import AgentCoordinator
-from strix.core.execution import _notify_parent_on_terminal, _notify_root_on_budget_reserve
+from strix.core.execution import (
+    _handle_content_guardrail,
+    _notify_parent_on_terminal,
+    _notify_root_on_budget_reserve,
+    respawn_subagents,
+)
 from strix.tools.finish.tool import finish_scan
 
 
@@ -465,3 +473,106 @@ async def test_notify_parent_on_terminal_ignores_non_terminal_status(tmp_path: A
 
     assert coordinator.pending_counts.get("root", 0) == 0
     session.close()
+
+
+class _RecordingStream:
+    def __init__(self) -> None:
+        self.cancelled = False
+        self.cancel_mode: str | None = None
+
+    def cancel(self, mode: str = "immediate") -> None:
+        self.cancelled = True
+        self.cancel_mode = mode
+
+
+@pytest.mark.asyncio
+async def test_terminal_notice_does_not_cancel_parent_stream(tmp_path: Any) -> None:
+    coordinator = AgentCoordinator()
+    await coordinator.register("root", "strix", parent_id=None)
+    await coordinator.register("child", "recon", parent_id="root")
+    session = SQLiteSession("root", tmp_path / "agents.db")
+    stream = _RecordingStream()
+    await coordinator.attach_runtime("root", session=session, interrupt_on_message=True)
+    await coordinator.attach_stream("root", stream)
+
+    await _notify_parent_on_terminal(coordinator, "child", "crashed")
+
+    assert stream.cancelled is False
+    assert coordinator.pending_counts.get("root", 0) > 0
+    session.close()
+
+
+@pytest.mark.asyncio
+async def test_guardrail_interactive_parks_agent_wakeable(tmp_path: Any) -> None:
+    coordinator = AgentCoordinator()
+    await coordinator.register("root", "strix", parent_id=None)
+    await coordinator.register("child", "recon", parent_id="root")
+    exc = codex.CodexContentGuardrailError("chatgpt/gpt-5.6-sol")
+
+    result = await _handle_content_guardrail(coordinator, "child", exc, interactive=True)
+
+    assert result is None
+    assert coordinator.statuses["child"] == "waiting"
+    assert "STRIX_LLM" in coordinator.errors["child"]
+
+    waiter = asyncio.create_task(coordinator.wait_for_message("child"))
+    await asyncio.sleep(0)
+    assert not waiter.done()
+    session = SQLiteSession("child", tmp_path / "agents.db")
+    await coordinator.attach_runtime("child", session=session)
+    await coordinator.send("child", {"from": "user", "content": "switched model, resume"})
+    await asyncio.wait_for(waiter, timeout=1.0)
+    session.close()
+
+
+@pytest.mark.asyncio
+async def test_guardrail_noninteractive_fails_only_blocked_agent(tmp_path: Any) -> None:
+    coordinator = AgentCoordinator()
+    await coordinator.register("root", "strix", parent_id=None)
+    await coordinator.register("child", "recon", parent_id="root")
+    session = SQLiteSession("root", tmp_path / "agents.db")
+    await coordinator.attach_runtime("root", session=session)
+    exc = codex.CodexContentGuardrailError("chatgpt/gpt-5.6-sol")
+
+    result = await _handle_content_guardrail(coordinator, "child", exc, interactive=False)
+
+    assert result is None
+    assert coordinator.statuses["child"] == "failed"
+    assert "STRIX_LLM" in coordinator.errors["child"]
+    assert coordinator.statuses["root"] == "running"
+    assert coordinator.pending_counts.get("root", 0) > 0
+    session.close()
+
+
+@pytest.mark.asyncio
+async def test_resume_revives_guardrail_parked_child_but_not_plain_waiting(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    coordinator = AgentCoordinator()
+    await coordinator.register("root", "strix", parent_id=None)
+    await coordinator.register("blocked", "recon", parent_id="root")
+    await coordinator.register("peer_waiter", "recon", parent_id="root")
+    await coordinator.set_status("blocked", "waiting", error="STRIX_LLM guardrail")
+    await coordinator.set_status("peer_waiter", "waiting")
+
+    parked: dict[str, bool] = {}
+
+    async def _fake_start_child_runner(**kwargs: Any) -> None:
+        parked[kwargs["child_id"]] = bool(kwargs["start_parked"])
+
+    monkeypatch.setattr(execution, "_start_child_runner", _fake_start_child_runner)
+
+    await respawn_subagents(
+        coordinator=coordinator,
+        factory=lambda **_kwargs: object(),
+        agents_db_path=tmp_path / "agents.db",
+        sessions_to_close=[],
+        run_config=MagicMock(),
+        max_turns=10,
+        interactive=True,
+        parent_ctx={"agent_id": "root", "parent_id": None},
+        root_id="root",
+    )
+
+    assert parked["blocked"] is False
+    assert parked["peer_waiter"] is True
