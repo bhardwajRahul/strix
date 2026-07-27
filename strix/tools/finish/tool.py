@@ -253,6 +253,8 @@ async def finish_scan(
     parent_id = inner.get("parent_id")
     if coordinator is not None and parent_id is None and me is not None:
         active_agents = await coordinator.active_agents_except(me)
+        if active_agents and coordinator.reserve_stopped:
+            active_agents = []
     else:
         active_agents = []
 

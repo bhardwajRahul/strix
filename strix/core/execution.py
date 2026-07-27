@@ -21,7 +21,11 @@ from openai import (
     RateLimitError,
 )
 
-from strix.core.hooks import BudgetExceededError
+from strix.core.hooks import (
+    BudgetExceededError,
+    BudgetPausedError,
+    SubagentBudgetReservedError,
+)
 from strix.core.inputs import child_initial_input
 from strix.core.sessions import (
     enforce_image_budget,
@@ -134,21 +138,34 @@ async def run_agent_loop(
     )
     result: RunResultBase | None = None
 
+    budget_stopped = coordinator.budget_stopped
+    reserve_stopped = coordinator.reserve_stopped
+    if budget_stopped:
+        await coordinator.set_status(agent_id, "stopped")
+        raise BudgetExceededError("scan budget reached")
+    if reserve_stopped and context.get("parent_id") is not None:
+        await coordinator.set_status(agent_id, "stopped")
+        raise SubagentBudgetReservedError("scan reached the sub-agent budget reserve")
+
+    if reserve_stopped and start_parked and interactive and context.get("parent_id") is None:
+        await coordinator.send(agent_id, _reserve_notice())
+
     if not (start_parked and interactive):
         if interactive:
-            result = await _run_cycle(
-                agent,
-                coordinator,
-                agent_id,
-                input_data=initial_input,
-                run_config=run_config,
-                context=context,
-                max_turns=max_turns,
-                session=session,
-                interactive=interactive,
-                event_sink=event_sink,
-                hooks=hooks,
-            )
+            with contextlib.suppress(BudgetPausedError):
+                result = await _run_cycle(
+                    agent,
+                    coordinator,
+                    agent_id,
+                    input_data=initial_input,
+                    run_config=run_config,
+                    context=context,
+                    max_turns=max_turns,
+                    session=session,
+                    interactive=interactive,
+                    event_sink=event_sink,
+                    hooks=hooks,
+                )
         else:
             result = await _run_noninteractive_until_lifecycle(
                 agent,
@@ -176,20 +193,25 @@ async def run_agent_loop(
             await coordinator.set_status(agent_id, "stopped")
             raise BudgetExceededError("scan budget reached")
 
+        if coordinator.reserve_stopped and context.get("parent_id") is not None:
+            await coordinator.set_status(agent_id, "stopped")
+            raise SubagentBudgetReservedError("scan reached the sub-agent budget reserve")
+
         await coordinator.consume_pending(agent_id)
-        result = await _run_cycle(
-            agent,
-            coordinator,
-            agent_id,
-            input_data=[],
-            run_config=run_config,
-            context=context,
-            max_turns=max_turns,
-            session=session,
-            interactive=interactive,
-            event_sink=event_sink,
-            hooks=hooks,
-        )
+        with contextlib.suppress(BudgetPausedError):
+            result = await _run_cycle(
+                agent,
+                coordinator,
+                agent_id,
+                input_data=[],
+                run_config=run_config,
+                context=context,
+                max_turns=max_turns,
+                session=session,
+                interactive=interactive,
+                event_sink=event_sink,
+                hooks=hooks,
+            )
 
 
 async def spawn_child_agent(
@@ -361,6 +383,10 @@ async def _run_noninteractive_until_lifecycle(
             await coordinator.set_status(agent_id, "stopped")
             raise BudgetExceededError("scan budget reached")
 
+        if coordinator.reserve_stopped and context.get("parent_id") is not None:
+            await coordinator.set_status(agent_id, "stopped")
+            raise SubagentBudgetReservedError("scan reached the sub-agent budget reserve")
+
         result = await _run_cycle(
             agent,
             coordinator,
@@ -456,9 +482,7 @@ async def _run_cycle(  # noqa: PLR0912, PLR0915
                                 logger.exception("stream event sink failed for %s", agent_id)
                     if stream.run_loop_exception is not None:
                         raise stream.run_loop_exception
-                except BudgetExceededError:
-                    # A RuntimeError subclass: re-raise explicitly so it is never
-                    # mistaken for the LiteLLM "after shutdown" race below.
+                except (BudgetExceededError, BudgetPausedError, SubagentBudgetReservedError):
                     raise
                 except RuntimeError as stream_exc:
                     if "after shutdown" not in str(stream_exc):
@@ -477,6 +501,15 @@ async def _run_cycle(  # noqa: PLR0912, PLR0915
                     )
             finally:
                 await coordinator.detach_stream(agent_id, stream)
+        except BudgetPausedError as exc:
+            logger.info("agent %s paused at the scan budget limit: %s", agent_id, exc)
+            await coordinator.pause_for_budget(agent_id)
+            raise
+        except SubagentBudgetReservedError as exc:
+            logger.info("sub-agent %s stopped at the budget reserve: %s", agent_id, exc)
+            await coordinator.set_status(agent_id, "stopped")
+            await _notify_root_on_budget_reserve(coordinator)
+            raise
         except BudgetExceededError as exc:
             logger.info(
                 "agent %s reached the scan budget limit; stopping the scan: %s", agent_id, exc
@@ -639,6 +672,28 @@ async def _notify_parent_on_crash(
     )
 
 
+def _reserve_notice() -> dict[str, Any]:
+    return {
+        "from": "system",
+        "type": "budget_reserve_stop",
+        "priority": "high",
+        "content": (
+            "[Budget reserve] The scan has reached the sub-agent budget reserve: every "
+            "sub-agent is being force-stopped as soon as its in-flight turn completes, and "
+            "none will send a completion report. Their confirmed vulnerabilities are "
+            "already filed as they were found. Do not wait on any sub-agents and do not "
+            "spawn new ones — wrap up now and call finish_scan."
+        ),
+    }
+
+
+async def _notify_root_on_budget_reserve(coordinator: AgentCoordinator) -> None:
+    root = await coordinator.claim_reserve_notification()
+    if root is None:
+        return
+    await coordinator.send(root, _reserve_notice())
+
+
 async def _start_child_runner(
     *,
     parent_ctx: dict[str, Any],
@@ -690,6 +745,8 @@ async def _start_child_runner(
             )
         except BudgetExceededError:
             logger.info("child %s stopped after reaching the scan budget limit", child_id)
+        except SubagentBudgetReservedError:
+            logger.info("child %s stopped at the sub-agent budget reserve", child_id)
 
     task_handle = asyncio.create_task(_child_loop(), name=f"agent-{name}-{child_id}")
     await coordinator.attach_runtime(child_id, task=task_handle)
