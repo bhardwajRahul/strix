@@ -847,15 +847,15 @@ async def test_interactive_text_only_turn_is_nudged_instead_of_parking(
     # The retry carries an explicit "call a tool" nudge rather than empty input.
     nudge = calls[1][0]["content"]
     assert "without a tool call" in nudge
-    assert "wait_for_message" in nudge
+    assert "respond_to_user" in nudge
     assert coordinator.statuses["root"] == "completed"
 
 
 @pytest.mark.asyncio
-async def test_interactive_wait_for_message_parks_without_a_nudge(
+async def test_interactive_explicit_park_gets_no_nudge(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``waiting`` is now only reachable by an explicit wait_for_message call."""
+    """``waiting`` is only reachable via respond_to_user / wait_for_agents."""
     coordinator = AgentCoordinator()
     await coordinator.register("root", "strix", parent_id=None)
     calls: list[Any] = []
@@ -898,7 +898,7 @@ async def test_interactive_subagent_exhaustion_tells_its_parent(
     """A parked child must report up so its parent stops waiting on it.
 
     The parent is an agent, not a watching human, so a parent blocked in
-    wait_for_message otherwise burns its whole timeout on a completion
+    wait_for_agents otherwise burns its whole timeout on a completion
     report the child can no longer send.
     """
     coordinator = AgentCoordinator()
@@ -978,7 +978,7 @@ async def test_tool_required_message_is_persisted_to_the_session(tmp_path: Any) 
 
     stored = [cast("dict[str, Any]", i) for i in await session.get_items()]
     assert "finish_scan" in stored[0]["content"]
-    assert "wait_for_message" in stored[0]["content"]
+    assert "respond_to_user" in stored[0]["content"]
     session.close()
 
 
@@ -1033,3 +1033,58 @@ async def test_recovery_count_is_cleared_by_a_lifecycle_tool(
     await _drive(coordinator, "root", interactive=True)
 
     assert "root" not in coordinator.recovery_counts
+
+
+@pytest.mark.asyncio
+async def test_agent_awaiting_a_human_is_never_auto_resumed() -> None:
+    """The user can message any agent, so parking for one is not root-only."""
+    coordinator = AgentCoordinator()
+    await coordinator.register("root", "strix", parent_id=None)
+    await coordinator.register("child", "recon", parent_id="root")
+
+    for agent_id in ("root", "child"):
+        await coordinator.park_waiting(agent_id, wait_kind="user")
+        assert await execution._plain_waiting_timeout(coordinator, agent_id) is None
+
+
+@pytest.mark.asyncio
+async def test_agent_awaiting_other_agents_is_re_checked_on_a_timer() -> None:
+    coordinator = AgentCoordinator()
+    await coordinator.register("root", "strix", parent_id=None)
+    await coordinator.park_waiting("root", wait_kind="agents")
+
+    timeout = await execution._plain_waiting_timeout(coordinator, "root")
+    assert timeout == execution._WAITING_AUTO_RESUME_TIMEOUT_S
+
+
+@pytest.mark.asyncio
+async def test_idle_auto_resumes_stop_after_their_budget() -> None:
+    """A wedged agent must not burn a model turn per timeout for the whole scan."""
+    coordinator = AgentCoordinator()
+    await coordinator.register("child", "recon", parent_id="root")
+    await coordinator.park_waiting("child", wait_kind="agents")
+
+    for _ in range(execution._MAX_IDLE_AUTO_RESUMES):
+        assert await execution._plain_waiting_timeout(coordinator, "child") is not None
+        await coordinator.record_idle_resume("child")
+
+    assert await execution._plain_waiting_timeout(coordinator, "child") is None
+
+    # A real message is real progress, so the budget starts over.
+    await coordinator.reset_idle_resumes("child")
+    assert await execution._plain_waiting_timeout(coordinator, "child") is not None
+
+
+@pytest.mark.asyncio
+async def test_wait_kind_survives_a_snapshot_round_trip() -> None:
+    coordinator = AgentCoordinator()
+    await coordinator.register("root", "strix", parent_id=None)
+    await coordinator.park_waiting("root", wait_kind="user")
+    await coordinator.record_idle_resume("root")
+
+    restored = AgentCoordinator()
+    await restored.restore(await coordinator.snapshot())
+
+    assert restored.wait_kinds["root"] == "user"
+    assert restored.idle_resume_counts["root"] == 1
+    assert await execution._plain_waiting_timeout(restored, "root") is None

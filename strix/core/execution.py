@@ -227,7 +227,7 @@ async def run_agent_loop(
         return result
 
     while True:
-        timeout = await _plain_waiting_timeout(coordinator, agent_id, context)
+        timeout = await _plain_waiting_timeout(coordinator, agent_id)
         try:
             woke = await coordinator.wait_for_message(agent_id, timeout=timeout)
         except asyncio.CancelledError:
@@ -245,7 +245,19 @@ async def run_agent_loop(
             # Real input is real progress, so the nudge budget starts over. A bare
             # auto-resume is not: it must not hand a wedged agent a fresh budget.
             await coordinator.reset_recovery(agent_id)
+            await coordinator.reset_idle_resumes(agent_id)
         else:
+            idle_resumes = await coordinator.record_idle_resume(agent_id)
+            if idle_resumes >= _MAX_IDLE_AUTO_RESUMES:
+                logger.warning(
+                    "agent %s auto-resumed %d times without hearing from anyone; "
+                    "leaving it parked until a real message arrives",
+                    agent_id,
+                    idle_resumes,
+                )
+                await coordinator.park_waiting(agent_id, wait_kind="stalled")
+                await _notify_parent_on_stall(coordinator, agent_id)
+                continue
             logger.info("agent %s reached its waiting timeout; auto-resuming", agent_id)
             await coordinator.send(
                 agent_id,
@@ -438,10 +450,10 @@ async def _run_until_lifecycle(
 ) -> RunResultBase | None:
     """Drive an agent until an explicit lifecycle tool settles its status.
 
-    A turn that ends without ``finish_scan``, ``agent_finish``, or
-    ``wait_for_message`` leaves the agent ``running``: plain text never
-    terminates a run and never yields to the user. Such a turn is nudged back
-    into a tool call, bounded by a recovery limit.
+    A turn that ends without ``finish_scan``, ``agent_finish``,
+    ``respond_to_user``, or ``wait_for_agents`` leaves the agent ``running``:
+    plain text never terminates a run and never yields to the user. Such a turn
+    is nudged back into a tool call, bounded by a recovery limit.
     """
     result: RunResultBase | None = None
     input_data: Any = initial_input
@@ -521,8 +533,8 @@ async def _exhausted_recovery(
 ) -> RunResultBase | None:
     """Settle an agent that never recovered into a tool call.
 
-    Interactive runs park instead of dying: a human is present, so the scan
-    stays resumable by sending another message. Autonomous runs have nobody to
+    Interactive runs park instead of dying: a human is attached and can message
+    any agent, so the scan stays resumable. Autonomous runs have nobody to
     resume them, so they fail loudly.
     """
     if not interactive:
@@ -536,7 +548,7 @@ async def _exhausted_recovery(
         "agent %s exhausted tool-call recovery attempts; parking until a message arrives",
         agent_id,
     )
-    await coordinator.set_status(agent_id, "waiting")
+    await coordinator.park_waiting(agent_id, wait_kind="stalled")
     # A parked child owes its parent a completion report it can no longer send. The
     # parent is an agent, not a watching human, so nothing else tells it to stop
     # waiting and it burns its full timeout on a message that is never coming.
@@ -546,23 +558,35 @@ async def _exhausted_recovery(
 
 _WAITING_AUTO_RESUME_TIMEOUT_S = 300.0
 
+# An agent that parks again after every auto-resume makes no progress, so stop
+# spending a model turn per timeout and leave it parked for a real message.
+_MAX_IDLE_AUTO_RESUMES = 3
+
 
 async def _plain_waiting_timeout(
     coordinator: AgentCoordinator,
     agent_id: str,
-    context: dict[str, Any],
 ) -> float | None:
-    """Auto-resume timeout for a plainly-waiting subagent; None waits forever."""
-    if context.get("parent_id") is None:
-        return None
+    """Auto-resume timeout for a parked agent; None waits until a message arrives.
+
+    Driven by what the agent is waiting on, not by where it sits in the graph:
+    the user can message any agent, so an agent awaiting a human parks
+    indefinitely whether or not it is the root. Only an agent awaiting other
+    agents is re-checked on a timer, and only until it has spent its idle
+    budget re-parking without hearing anything.
+    """
     async with coordinator._lock:
         status = coordinator.statuses.get(agent_id)
         has_error = agent_id in coordinator.errors
         runtime = coordinator.runtimes.get(agent_id)
         gated = runtime.user_wake_required if runtime is not None else False
-    if status == "waiting" and not has_error and not gated:
-        return _WAITING_AUTO_RESUME_TIMEOUT_S
-    return None
+        wait_kind = coordinator.wait_kinds.get(agent_id)
+        idle_resumes = coordinator.idle_resume_counts.get(agent_id, 0)
+    if status != "waiting" or has_error or gated:
+        return None
+    if wait_kind != "agents" or idle_resumes >= _MAX_IDLE_AUTO_RESUMES:
+        return None
+    return _WAITING_AUTO_RESUME_TIMEOUT_S
 
 
 async def _run_cycle_parked(
@@ -801,8 +825,9 @@ async def _append_tool_required_message(
             "Your previous message ended a turn without a tool call. Plain text never ends "
             "execution and never hands control to the user: it is shown to the user, and the "
             "run continues. Continue immediately and call exactly one tool. "
-            "If you have finished responding and want the user's next message, call "
-            "wait_for_message. "
+            "If you have something to tell the user and nothing to do until they reply, "
+            "call respond_to_user. "
+            "If you are blocked waiting for another agent, call wait_for_agents. "
             f"If the whole engagement is complete, call {finish_tool}. "
             "Otherwise use the appropriate execution or planning tool. "
             f"This is recovery attempt {attempt}/{limit}."
@@ -813,7 +838,7 @@ async def _append_tool_required_message(
             "call. That is invalid in non-interactive mode; plain text final answers are "
             "ignored. Continue immediately and call exactly one tool. "
             f"If your work is complete, call {finish_tool}. "
-            "If you are blocked waiting for another agent, call wait_for_message. "
+            "If you are blocked waiting for another agent, call wait_for_agents. "
             "Otherwise use the appropriate execution or planning tool. "
             f"This is recovery attempt {attempt}/{limit}."
         )
