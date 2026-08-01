@@ -931,3 +931,56 @@ async def test_tool_required_message_is_persisted_to_the_session(tmp_path: Any) 
     assert "finish_scan" in stored[0]["content"]
     assert "wait_for_message" in stored[0]["content"]
     session.close()
+
+
+@pytest.mark.asyncio
+async def test_recovery_count_survives_a_snapshot_round_trip(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A resumed agent must not earn a fresh nudge budget and loop forever."""
+    coordinator = AgentCoordinator()
+    await coordinator.register("root", "strix", parent_id=None)
+    calls: list[Any] = []
+    monkeypatch.setattr(
+        execution,
+        "_run_cycle_parked",
+        _scripted_cycle(coordinator, "root", ["running"], calls),
+    )
+
+    await _drive(coordinator, "root", interactive=True)
+    assert coordinator.recovery_counts["root"] == execution._INTERACTIVE_TOOL_RECOVERY_LIMIT
+
+    restored = AgentCoordinator()
+    await restored.restore(await coordinator.snapshot())
+    assert restored.recovery_counts["root"] == execution._INTERACTIVE_TOOL_RECOVERY_LIMIT
+
+    # The restored agent is already at its cap, so it parks after a single
+    # further text-only cycle instead of starting the whole budget over.
+    resumed_calls: list[Any] = []
+    monkeypatch.setattr(
+        execution,
+        "_run_cycle_parked",
+        _scripted_cycle(restored, "root", ["running"], resumed_calls),
+    )
+    await _drive(restored, "root", interactive=True)
+
+    assert len(resumed_calls) == 1
+    assert restored.statuses["root"] == "waiting"
+
+
+@pytest.mark.asyncio
+async def test_recovery_count_is_cleared_by_a_lifecycle_tool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    coordinator = AgentCoordinator()
+    await coordinator.register("root", "strix", parent_id=None)
+    calls: list[Any] = []
+    monkeypatch.setattr(
+        execution,
+        "_run_cycle_parked",
+        _scripted_cycle(coordinator, "root", ["running", "completed"], calls),
+    )
+
+    await _drive(coordinator, "root", interactive=True)
+
+    assert "root" not in coordinator.recovery_counts

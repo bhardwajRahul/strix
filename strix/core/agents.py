@@ -46,6 +46,7 @@ class AgentCoordinator:
         self.metadata: dict[str, dict[str, Any]] = {}
         self.pending_counts: dict[str, int] = {}
         self.errors: dict[str, str] = {}
+        self.recovery_counts: dict[str, int] = {}
         self.runtimes: dict[str, AgentRuntime] = {}
         self._lock = asyncio.Lock()
         self._snapshot_path: Path | None = None
@@ -186,6 +187,25 @@ class AgentCoordinator:
 
     async def park_waiting(self, agent_id: str) -> None:
         await self.set_status(agent_id, "waiting")
+
+    async def record_recovery(self, agent_id: str) -> int:
+        """Count a turn that ended without a lifecycle tool call; return the new total.
+
+        Persisted so a resumed agent cannot earn a fresh nudge budget on every
+        auto-resume and loop forever.
+        """
+        async with self._lock:
+            count = self.recovery_counts.get(agent_id, 0) + 1
+            self.recovery_counts[agent_id] = count
+        await self._maybe_snapshot()
+        return count
+
+    async def reset_recovery(self, agent_id: str) -> None:
+        """Clear the nudge budget after real progress (new message or a lifecycle tool)."""
+        async with self._lock:
+            if self.recovery_counts.pop(agent_id, None) is None:
+                return
+        await self._maybe_snapshot()
 
     async def set_status(
         self, agent_id: str, status: Status | str, *, error: str | None = None
@@ -397,6 +417,7 @@ class AgentCoordinator:
                 "names": dict(self.names),
                 "metadata": {aid: dict(md) for aid, md in self.metadata.items()},
                 "pending_counts": dict(self.pending_counts),
+                "recovery_counts": dict(self.recovery_counts),
                 "mailboxes": {
                     aid: [dict(m) for m in runtime.mailbox]
                     for aid, runtime in self.runtimes.items()
@@ -416,6 +437,7 @@ class AgentCoordinator:
             self.metadata = {aid: dict(md) for aid, md in snap.get("metadata", {}).items()}
             self.pending_counts = dict(snap.get("pending_counts", {}))
             self.errors = dict(snap.get("errors", {}))
+            self.recovery_counts = dict(snap.get("recovery_counts", {}))
             mailboxes = snap.get("mailboxes", {})
             if isinstance(mailboxes, dict):
                 for aid, msgs in mailboxes.items():

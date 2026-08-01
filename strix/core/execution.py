@@ -241,7 +241,11 @@ async def run_agent_loop(
             await coordinator.set_status(agent_id, "stopped")
             raise SubagentBudgetReservedError("scan reached the sub-agent budget reserve")
 
-        if not woke:
+        if woke:
+            # Real input is real progress, so the nudge budget starts over. A bare
+            # auto-resume is not: it must not hand a wedged agent a fresh budget.
+            await coordinator.reset_recovery(agent_id)
+        else:
             logger.info("agent %s reached its waiting timeout; auto-resuming", agent_id)
             await coordinator.send(
                 agent_id,
@@ -441,7 +445,6 @@ async def _run_until_lifecycle(
     """
     result: RunResultBase | None = None
     input_data: Any = initial_input
-    recoveries = 0
     recovery_limit = _INTERACTIVE_TOOL_RECOVERY_LIMIT if interactive else max(1, max_turns)
 
     while True:
@@ -483,9 +486,10 @@ async def _run_until_lifecycle(
 
         status = await _agent_status(coordinator, agent_id)
         if status != "running":
+            await coordinator.reset_recovery(agent_id)
             return result
 
-        recoveries += 1
+        recoveries = await coordinator.record_recovery(agent_id)
         logger.warning(
             "agent %s ended a turn without a lifecycle tool call (interactive=%s); "
             "forcing tool continuation (%d/%d): %s",
