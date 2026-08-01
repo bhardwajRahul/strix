@@ -895,10 +895,11 @@ async def test_interactive_recovery_exhaustion_parks_instead_of_crashing(
 async def test_interactive_subagent_exhaustion_tells_its_parent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The user only talks to the root, so a parked child must report up.
+    """A parked child must report up so its parent stops waiting on it.
 
-    Otherwise a parent blocked in wait_for_message burns its whole timeout
-    waiting for a completion report the child can no longer send.
+    The parent is an agent, not a watching human, so a parent blocked in
+    wait_for_message otherwise burns its whole timeout on a completion
+    report the child can no longer send.
     """
     coordinator = AgentCoordinator()
     await coordinator.register("root", "strix", parent_id=None)
@@ -924,7 +925,7 @@ async def test_interactive_subagent_exhaustion_tells_its_parent(
 async def test_interactive_root_exhaustion_notifies_nobody(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A parked root is self-service: the user is already watching it."""
+    """The root has no parent to report to, so parking stays silent."""
     coordinator = AgentCoordinator()
     await coordinator.register("root", "strix", parent_id=None)
     monkeypatch.setattr(

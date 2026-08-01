@@ -537,9 +537,9 @@ async def _exhausted_recovery(
         agent_id,
     )
     await coordinator.set_status(agent_id, "waiting")
-    # The user talks to the root, so parking is only self-service there. A parked
-    # subagent owes its parent a report it can no longer send, and the parent would
-    # otherwise wait out its full timeout for a message that is never coming.
+    # A parked child owes its parent a completion report it can no longer send. The
+    # parent is an agent, not a watching human, so nothing else tells it to stop
+    # waiting and it burns its full timeout on a message that is never coming.
     await _notify_parent_on_stall(coordinator, agent_id)
     return result
 
