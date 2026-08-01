@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
@@ -14,16 +14,17 @@ from agents.memory import SQLiteSession
 from agents.tool_context import ToolContext
 from openai.types.responses import ResponseOutputMessage, ResponseOutputRefusal
 
-from strix.config import codex
 from strix.core import execution
 from strix.core.agents import AgentCoordinator
 from strix.core.execution import (
-    _handle_content_guardrail,
     _notify_parent_on_terminal,
     _notify_root_on_budget_reserve,
-    respawn_subagents,
 )
+from strix.core.sessions import seed_initial_input
 from strix.tools.finish.tool import finish_scan
+
+
+_NO_STREAM_EVENTS: list[Any] = []
 
 
 class _StructuredRefusalStream:
@@ -43,8 +44,8 @@ class _StructuredRefusalStream:
         ]
 
     async def stream_events(self) -> Any:
-        if False:
-            yield None
+        for event in _NO_STREAM_EVENTS:
+            yield event
 
     def cancel(self, mode: str = "immediate") -> None:  # noqa: ARG002
         return
@@ -529,44 +530,152 @@ async def test_terminal_notice_does_not_cancel_parent_stream(tmp_path: Any) -> N
 
 
 @pytest.mark.asyncio
-async def test_guardrail_interactive_parks_agent_wakeable(tmp_path: Any) -> None:
+async def test_send_queues_without_session_and_drains_on_consume(tmp_path: Any) -> None:
     coordinator = AgentCoordinator()
     await coordinator.register("root", "strix", parent_id=None)
-    await coordinator.register("child", "recon", parent_id="root")
-    exc = codex.CodexContentGuardrailError("chatgpt/gpt-5.6-sol")
 
-    result = await _handle_content_guardrail(coordinator, "child", exc, interactive=True)
+    assert await coordinator.send("root", {"from": "user", "content": "hello"}) is True
+    assert coordinator.pending_counts["root"] == 1
 
-    assert result is None
-    assert coordinator.statuses["child"] == "waiting"
-    assert "STRIX_LLM" in coordinator.errors["child"]
+    session = SQLiteSession("root", tmp_path / "agents.db")
+    await coordinator.attach_runtime("root", session=session)
 
-    waiter = asyncio.create_task(coordinator.wait_for_message("child"))
-    await asyncio.sleep(0)
-    assert not waiter.done()
-    session = SQLiteSession("child", tmp_path / "agents.db")
-    await coordinator.attach_runtime("child", session=session)
-    await coordinator.send("child", {"from": "user", "content": "switched model, resume"})
-    await asyncio.wait_for(waiter, timeout=1.0)
+    count, items = await coordinator.consume_pending("root", include_items=True)
+    assert count == 1
+    assert items[0]["content"] == "hello"
+    stored = await session.get_items()
+    last = cast("dict[str, Any]", stored[-1])
+    assert last["content"] == "hello"
     session.close()
 
 
 @pytest.mark.asyncio
-async def test_guardrail_noninteractive_fails_only_blocked_agent(tmp_path: Any) -> None:
+async def test_error_parked_agent_only_released_by_user_message(tmp_path: Any) -> None:
     coordinator = AgentCoordinator()
     await coordinator.register("root", "strix", parent_id=None)
     await coordinator.register("child", "recon", parent_id="root")
-    session = SQLiteSession("root", tmp_path / "agents.db")
-    await coordinator.attach_runtime("root", session=session)
-    exc = codex.CodexContentGuardrailError("chatgpt/gpt-5.6-sol")
+    session = SQLiteSession("child", tmp_path / "agents.db")
+    await coordinator.attach_runtime("child", session=session)
+    await coordinator.set_status("child", "crashed", error="boom")
 
-    result = await _handle_content_guardrail(coordinator, "child", exc, interactive=False)
+    await coordinator.send("child", {"from": "root", "content": "peer nudge"})
+    waiter = asyncio.create_task(coordinator.wait_for_message("child"))
+    await asyncio.sleep(0.05)
+    assert not waiter.done()
+
+    await coordinator.send("child", {"from": "user", "content": "wake up"})
+    assert await asyncio.wait_for(waiter, timeout=1.0) is True
+
+    count, items = await coordinator.consume_pending("child", include_items=True)
+    assert count == 2
+    assert items[0]["content"].endswith("peer nudge")
+    assert items[1]["content"] == "wake up"
+    session.close()
+
+
+@pytest.mark.asyncio
+async def test_wait_for_message_timeout_returns_false() -> None:
+    coordinator = AgentCoordinator()
+    await coordinator.register("child", "recon", parent_id="root")
+
+    assert await coordinator.wait_for_message("child", timeout=0.05) is False
+
+
+@pytest.mark.asyncio
+async def test_snapshot_round_trip_preserves_mailboxes() -> None:
+    coordinator = AgentCoordinator()
+    await coordinator.register("root", "strix", parent_id=None)
+    await coordinator.send("root", {"from": "user", "content": "queued"})
+
+    snap = await coordinator.snapshot()
+    restored = AgentCoordinator()
+    await restored.restore(snap)
+
+    assert restored.pending_counts["root"] == 1
+    assert restored.runtimes["root"].mailbox == [{"from": "user", "content": "queued"}]
+
+
+@pytest.mark.asyncio
+async def test_run_cycle_parked_parks_instead_of_raising(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _boom(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError("unexpected explosion")
+
+    monkeypatch.setattr(execution, "_run_cycle", _boom)
+
+    coordinator = AgentCoordinator()
+    await coordinator.register("root", "strix", parent_id=None)
+
+    result = await execution._run_cycle_parked(
+        object(),
+        coordinator,
+        "root",
+        input_data=[],
+        run_config=None,  # type: ignore[arg-type]
+        context={},
+        max_turns=5,
+        session=None,
+        event_sink=None,
+        hooks=None,
+    )
 
     assert result is None
-    assert coordinator.statuses["child"] == "failed"
-    assert "STRIX_LLM" in coordinator.errors["child"]
-    assert coordinator.statuses["root"] == "running"
-    assert coordinator.pending_counts.get("root", 0) > 0
+    assert coordinator.statuses["root"] == "failed"
+    assert coordinator.errors["root"] == "unexpected explosion"
+
+
+class _SalvageStream:
+    def __init__(self, replay: list[dict[str, Any]]) -> None:
+        self._replay = replay
+
+    def to_input_list(self) -> list[dict[str, Any]]:
+        return self._replay
+
+
+@pytest.mark.asyncio
+async def test_salvage_stream_to_session_preserves_full_history(tmp_path: Any) -> None:
+    session = SQLiteSession("child", tmp_path / "agents.db")
+    await session.add_items([{"role": "user", "content": "identity + task"}])
+    pre_run = list(await session.get_items())
+
+    # A crash mid-run: the stream produced two turns the SDK never committed.
+    stream = _SalvageStream(
+        [
+            {"role": "assistant", "content": "recon turn 1"},
+            {"role": "assistant", "content": "recon turn 2"},
+        ]
+    )
+    await execution._salvage_stream_to_session(session, pre_run, stream, "child")
+
+    stored = [cast("dict[str, Any]", i) for i in await session.get_items()]
+    assert [i["content"] for i in stored] == [
+        "identity + task",
+        "recon turn 1",
+        "recon turn 2",
+    ]
+
+    # A crash with nothing new to salvage leaves the session untouched.
+    await execution._salvage_stream_to_session(
+        session, list(await session.get_items()), _SalvageStream([]), "child"
+    )
+    assert len(await session.get_items()) == 3
+    session.close()
+
+
+@pytest.mark.asyncio
+async def test_seed_initial_input_persists_and_is_idempotent(tmp_path: Any) -> None:
+    session = SQLiteSession("child", tmp_path / "agents.db")
+    identity = [{"role": "user", "content": "You are agent recon (abc); do X."}]
+
+    assert await seed_initial_input(session, identity) is True
+    assert len(await session.get_items()) == 1
+
+    # A populated session is left untouched (no duplicate identity message).
+    assert await seed_initial_input(session, identity) is False
+    assert len(await session.get_items()) == 1
+
+    assert await seed_initial_input(session, []) is False
     session.close()
 
 
@@ -576,7 +685,9 @@ async def test_structured_provider_refusal_fails_interactive_agent(
 ) -> None:
     refusal = "This request was blocked under the provider's usage policy."
     stream = _StructuredRefusalStream(refusal)
-    monkeypatch.setattr(execution.Runner, "run_streamed", lambda *_args, **_kwargs: stream)
+    monkeypatch.setattr(
+        "strix.core.execution.Runner.run_streamed", lambda *_args, **_kwargs: stream
+    )
     coordinator = AgentCoordinator()
     await coordinator.register("root", "strix", parent_id=None)
 
@@ -606,7 +717,9 @@ async def test_structured_provider_refusal_fails_noninteractive_child(
 ) -> None:
     refusal = "This request was blocked under the provider's usage policy."
     stream = _StructuredRefusalStream(refusal)
-    monkeypatch.setattr(execution.Runner, "run_streamed", lambda *_args, **_kwargs: stream)
+    monkeypatch.setattr(
+        "strix.core.execution.Runner.run_streamed", lambda *_args, **_kwargs: stream
+    )
     coordinator = AgentCoordinator()
     await coordinator.register("root", "strix", parent_id=None)
     await coordinator.register("child", "recon", parent_id="root")
@@ -635,34 +748,40 @@ async def test_structured_provider_refusal_fails_noninteractive_child(
 
 
 @pytest.mark.asyncio
-async def test_resume_revives_guardrail_parked_child_but_not_plain_waiting(
+async def test_run_agent_loop_seeds_identity_before_first_cycle(
     tmp_path: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     coordinator = AgentCoordinator()
-    await coordinator.register("root", "strix", parent_id=None)
-    await coordinator.register("blocked", "recon", parent_id="root")
-    await coordinator.register("peer_waiter", "recon", parent_id="root")
-    await coordinator.set_status("blocked", "waiting", error="STRIX_LLM guardrail")
-    await coordinator.set_status("peer_waiter", "waiting")
+    await coordinator.register("child", "recon", parent_id="root")
+    session = SQLiteSession("child", tmp_path / "agents.db")
 
-    parked: dict[str, bool] = {}
+    captured: dict[str, Any] = {}
 
-    async def _fake_start_child_runner(**kwargs: Any) -> None:
-        parked[kwargs["child_id"]] = bool(kwargs["start_parked"])
+    async def _crash_first_turn(*_args: Any, **kwargs: Any) -> Any:
+        captured["input_data"] = kwargs.get("input_data")
+        captured["items_at_start"] = await session.get_items()
+        raise RuntimeError("first-turn crash")
 
-    monkeypatch.setattr(execution, "_start_child_runner", _fake_start_child_runner)
+    monkeypatch.setattr(execution, "_run_cycle", _crash_first_turn)
 
-    await respawn_subagents(
-        coordinator=coordinator,
-        factory=lambda **_kwargs: object(),
-        agents_db_path=tmp_path / "agents.db",
-        sessions_to_close=[],
-        run_config=MagicMock(),
-        max_turns=10,
-        interactive=True,
-        parent_ctx={"agent_id": "root", "parent_id": None},
-        root_id="root",
-    )
+    identity = [{"role": "user", "content": "You are agent recon (abc); maintain your identity."}]
+    with pytest.raises(RuntimeError, match="first-turn crash"):
+        await execution.run_agent_loop(
+            agent=object(),
+            initial_input=identity,
+            run_config=None,  # type: ignore[arg-type]
+            context={"agent_id": "child", "parent_id": "root"},
+            max_turns=5,
+            coordinator=coordinator,
+            agent_id="child",
+            interactive=False,
+            session=session,
+        )
 
-    assert parked["blocked"] is False
-    assert parked["peer_waiter"] is True
+    # The first cycle ran with an empty input against the pre-seeded session.
+    assert captured["input_data"] == []
+    assert captured["items_at_start"]
+    # The identity/task survives the first-turn crash, so a revival can resume it.
+    stored = await session.get_items()
+    assert any("recon" in str(cast("dict[str, Any]", i).get("content", "")) for i in stored)
+    session.close()

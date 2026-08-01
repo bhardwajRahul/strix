@@ -9,6 +9,7 @@ import uuid
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, cast
 
+import litellm
 from agents import RunConfig, Runner
 from agents.exceptions import AgentsException, MaxTurnsExceeded, UserError
 from agents.sandbox.errors import ExecTransportError
@@ -16,9 +17,7 @@ from docker import errors as docker_errors  # type: ignore[import-untyped, unuse
 from openai import (
     APIConnectionError,
     APIError,
-    APIStatusError,
     APITimeoutError,
-    RateLimitError,
 )
 
 from strix.config import codex
@@ -31,6 +30,8 @@ from strix.core.inputs import child_initial_input
 from strix.core.sessions import (
     enforce_image_budget,
     open_agent_session,
+    replace_session_items,
+    seed_initial_input,
     strip_all_images_from_session,
 )
 from strix.llm.compaction import is_context_overflow, maybe_compact
@@ -106,15 +107,9 @@ async def _compact_session(
     )
 
 
-_GUARDRAIL_PARK_ERROR = (
-    "Blocked by the model's content guardrail (flagged as a possible cybersecurity risk). "
-    "Set STRIX_LLM to a model that isn't blocked and resume the scan to continue."
-)
-
-_TRANSIENT_MODEL_STATUS_CODES = frozenset({408, 500, 502, 503, 504})
-_MAX_TRANSIENT_MODEL_RETRIES = 4
+_MAX_TRANSIENT_MODEL_RETRIES = 5
 _TRANSIENT_MODEL_RETRY_BASE_DELAY_S = 2.0
-_TRANSIENT_MODEL_RETRY_MAX_DELAY_S = 30.0
+_TRANSIENT_MODEL_RETRY_MAX_DELAY_S = 90.0
 
 
 def _model_error_status_code(exc: BaseException) -> int | None:
@@ -123,20 +118,55 @@ def _model_error_status_code(exc: BaseException) -> int | None:
 
 
 def _is_transient_model_error(exc: BaseException) -> bool:
-    if isinstance(exc, RateLimitError):
+    if codex.is_content_guardrail_error(exc):
         return False
-    if isinstance(exc, APITimeoutError | APIConnectionError):
+    if isinstance(
+        exc, APITimeoutError | APIConnectionError | TimeoutError | ConnectionError | OSError
+    ):
         return True
-    if isinstance(exc, APIStatusError):
-        return exc.status_code in _TRANSIENT_MODEL_STATUS_CODES
-    if isinstance(exc, APIError):
-        return _model_error_status_code(exc) is None
-    return False
+    code = _model_error_status_code(exc)
+    if code is not None:
+        return bool(litellm._should_retry(code))
+    return isinstance(exc, APIError)
 
 
 def _transient_model_retry_delay(attempt: int) -> float:
     delay = _TRANSIENT_MODEL_RETRY_BASE_DELAY_S * float(2 ** (attempt - 1))
     return min(delay, _TRANSIENT_MODEL_RETRY_MAX_DELAY_S)
+
+
+async def _salvage_stream_to_session(
+    session: Session,
+    pre_run_items: list[Any],
+    stream: Any,
+    agent_id: str,
+) -> None:
+    """Persist a crashed run's full history so a revived agent loses no context."""
+    if stream is None:
+        return
+    try:
+        replay = list(stream.to_input_list())
+    except Exception:
+        logger.exception("could not build salvage history for %s", agent_id)
+        return
+    desired = list(pre_run_items) + replay
+    if len(desired) <= len(pre_run_items):
+        return
+    try:
+        await replace_session_items(session, desired)
+    except Exception:
+        logger.exception("salvaging crashed run history failed for %s", agent_id)
+
+
+async def _seed_and_prepare_first_input(
+    session: Session | None, initial_input: Any, *, start_parked: bool
+) -> Any:
+    """Persist the opening input up front so it survives a first-turn crash."""
+    if initial_input and session is not None and not start_parked:
+        with contextlib.suppress(Exception):
+            if await seed_initial_input(session, initial_input):
+                return []
+    return initial_input
 
 
 async def run_agent_loop(
@@ -161,6 +191,10 @@ async def run_agent_loop(
     )
     result: RunResultBase | None = None
 
+    first_cycle_input = await _seed_and_prepare_first_input(
+        session, initial_input, start_parked=start_parked
+    )
+
     budget_stopped = coordinator.budget_stopped
     reserve_stopped = coordinator.reserve_stopped
     if budget_stopped:
@@ -176,16 +210,15 @@ async def run_agent_loop(
     if not (start_parked and interactive):
         if interactive:
             with contextlib.suppress(BudgetPausedError):
-                result = await _run_cycle(
+                result = await _run_cycle_parked(
                     agent,
                     coordinator,
                     agent_id,
-                    input_data=initial_input,
+                    input_data=first_cycle_input,
                     run_config=run_config,
                     context=context,
                     max_turns=max_turns,
                     session=session,
-                    interactive=interactive,
                     event_sink=event_sink,
                     hooks=hooks,
                 )
@@ -194,7 +227,7 @@ async def run_agent_loop(
                 agent,
                 coordinator,
                 agent_id,
-                initial_input=initial_input,
+                initial_input=first_cycle_input,
                 run_config=run_config,
                 context=context,
                 max_turns=max_turns,
@@ -207,8 +240,9 @@ async def run_agent_loop(
         return result
 
     while True:
+        timeout = await _plain_waiting_timeout(coordinator, agent_id, context)
         try:
-            await coordinator.wait_for_message(agent_id)
+            woke = await coordinator.wait_for_message(agent_id, timeout=timeout)
         except asyncio.CancelledError:
             return result
 
@@ -220,9 +254,21 @@ async def run_agent_loop(
             await coordinator.set_status(agent_id, "stopped")
             raise SubagentBudgetReservedError("scan reached the sub-agent budget reserve")
 
+        if not woke:
+            logger.info("agent %s reached its waiting timeout; auto-resuming", agent_id)
+            await coordinator.send(
+                agent_id,
+                {
+                    "from": "system",
+                    "type": "auto_resume",
+                    "content": "Waiting timeout reached. Resuming execution.",
+                },
+                interrupt=False,
+            )
+
         await coordinator.consume_pending(agent_id)
         with contextlib.suppress(BudgetPausedError):
-            result = await _run_cycle(
+            result = await _run_cycle_parked(
                 agent,
                 coordinator,
                 agent_id,
@@ -231,7 +277,6 @@ async def run_agent_loop(
                 context=context,
                 max_turns=max_turns,
                 session=session,
-                interactive=interactive,
                 event_sink=event_sink,
                 hooks=hooks,
             )
@@ -327,7 +372,6 @@ async def respawn_subagents(
             if coordinator.parent_of.get(aid) is None or aid == root_id:
                 continue
             md["_restored_status"] = status
-            md["_restored_error"] = coordinator.errors.get(aid)
             candidates.append(
                 (
                     aid,
@@ -340,8 +384,7 @@ async def respawn_subagents(
     for child_id, name, parent_id, md in candidates:
         try:
             restored_status = str(md.get("_restored_status") or "running")
-            recoverable_park = restored_status == "waiting" and bool(md.get("_restored_error"))
-            start_parked = interactive and restored_status != "running" and not recoverable_park
+            start_parked = interactive and restored_status != "running"
 
             if start_parked:
                 logger.warning(
@@ -456,6 +499,64 @@ async def _run_noninteractive_until_lifecycle(
         )
 
 
+_WAITING_AUTO_RESUME_TIMEOUT_S = 600.0
+
+
+async def _plain_waiting_timeout(
+    coordinator: AgentCoordinator,
+    agent_id: str,
+    context: dict[str, Any],
+) -> float | None:
+    """Auto-resume timeout for a plainly-waiting subagent; None waits forever."""
+    if context.get("parent_id") is None:
+        return None
+    async with coordinator._lock:
+        status = coordinator.statuses.get(agent_id)
+        has_error = agent_id in coordinator.errors
+        runtime = coordinator.runtimes.get(agent_id)
+        gated = runtime.user_wake_required if runtime is not None else False
+    if status == "waiting" and not has_error and not gated:
+        return _WAITING_AUTO_RESUME_TIMEOUT_S
+    return None
+
+
+async def _run_cycle_parked(
+    agent: Any,
+    coordinator: AgentCoordinator,
+    agent_id: str,
+    *,
+    input_data: Any,
+    run_config: RunConfig,
+    context: dict[str, Any],
+    max_turns: int,
+    session: Session | None,
+    event_sink: StreamEventSink | None,
+    hooks: RunHooks[dict[str, Any]] | None,
+) -> RunResultBase | None:
+    """Interactive run cycle that parks on any error instead of killing the runner."""
+    try:
+        return await _run_cycle(
+            agent,
+            coordinator,
+            agent_id,
+            input_data=input_data,
+            run_config=run_config,
+            context=context,
+            max_turns=max_turns,
+            session=session,
+            interactive=True,
+            event_sink=event_sink,
+            hooks=hooks,
+        )
+    except (BudgetExceededError, BudgetPausedError, SubagentBudgetReservedError):
+        raise
+    except Exception as exc:
+        logger.exception("error escaped the run cycle for %s; parking as failed", agent_id)
+        await coordinator.set_status(agent_id, "failed", error=str(exc) or type(exc).__name__)
+        await _notify_parent_on_terminal(coordinator, agent_id, "failed")
+        return None
+
+
 async def _run_cycle(  # noqa: PLR0912, PLR0915
     agent: Any,
     coordinator: AgentCoordinator,
@@ -474,6 +575,8 @@ async def _run_cycle(  # noqa: PLR0912, PLR0915
     compactions = 0
     model_retries = 0
     while True:
+        stream: Any = None
+        pre_run_items: list[Any] = []
         try:
             await coordinator.mark_running(agent_id)
             if session is not None:
@@ -487,6 +590,8 @@ async def _run_cycle(  # noqa: PLR0912, PLR0915
                     await _compact_session(agent, session, run_config, force=False)
                 except Exception:
                     logger.exception("proactive compaction failed for %s", agent_id)
+                with contextlib.suppress(Exception):
+                    pre_run_items = list(await session.get_items())
             stream = Runner.run_streamed(
                 agent,
                 input=input_data,
@@ -599,10 +704,8 @@ async def _run_cycle(  # noqa: PLR0912, PLR0915
                 if session is not None:
                     input_data = []
                 continue
-            if codex.is_content_guardrail_error(exc):
-                return await _handle_content_guardrail(
-                    coordinator, agent_id, exc, interactive=interactive
-                )
+            if session is not None:
+                await _salvage_stream_to_session(session, pre_run_items, stream, agent_id)
             if isinstance(exc, ProviderRefusalError):
                 logger.warning("agent %s refused by the model provider: %s", agent_id, exc)
                 await coordinator.set_status(agent_id, "failed", error=str(exc))
@@ -622,23 +725,7 @@ async def _run_cycle(  # noqa: PLR0912, PLR0915
             return None
         else:
             await _settle_run_result(coordinator, agent_id, interactive)
-            return stream
-
-
-async def _handle_content_guardrail(
-    coordinator: AgentCoordinator,
-    agent_id: str,
-    exc: BaseException,
-    *,
-    interactive: bool,
-) -> RunResultBase | None:
-    logger.warning("agent %s blocked by the model's content guardrail: %s", agent_id, exc)
-    if interactive:
-        await coordinator.set_status(agent_id, "waiting", error=_GUARDRAIL_PARK_ERROR)
-        return None
-    await coordinator.set_status(agent_id, "failed", error=_GUARDRAIL_PARK_ERROR)
-    await _notify_parent_on_terminal(coordinator, agent_id, "failed")
-    return None
+            return cast("RunResultBase | None", stream)
 
 
 async def _settle_run_result(
