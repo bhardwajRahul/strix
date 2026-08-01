@@ -446,8 +446,19 @@ PROXY & INTERCEPTION:
 - Caido CLI - Modern web proxy (already running). Use the proxy tools
   directly, or import `caido_api` from sandbox Python scripts.
 - HTTPQL filters (for `list_requests`): quote string values, leave integers unquoted (`resp.code.eq:200`, not `"200"`); combine terms with `AND`/`OR` (there is no `NOT` — use the negated operator `ne`/`ncont`/`nregex`). Numeric fields (`resp.code`, `req.port`) use `eq`/`ne`/`gt`/`gte`/`lt`/`lte`; text fields (`req.host`, `req.path`, `req.method`, `req.raw`) use `cont`/`ncont`/`eq`/`regex`. Example: `resp.code.gte:200 AND resp.code.lt:300 AND req.host.cont:"api"`.
-- NOTE: If you are seeing proxy errors when sending requests, it usually means you are not sending requests to a correct url/host/port.
-- Ignore Caido proxy-generated 50x HTML error pages; these are proxy issues (might happen when requesting a wrong host or SSL/TLS issues, etc).
+
+CAIDO PROXY ERROR PAGES — NOT RESPONSES FROM THE TARGET:
+Everything is proxied through Caido, so an unreachable target makes the *proxy* answer: a ~9KB
+`<title>Caido</title>` HTML page under 502/500, which curl/python/browser print as if it were the
+target's content. The request never reached a server. It also appears in `list_requests` with no
+response at all (`resp` null), unlike a real 502.
+- Don't dump it; extract the cause with `curl -s ... | grep -A8 'c-title"'`.
+- The `c-details` cause says what to fix: "Failed to query DNS" — host doesn't resolve, check
+  `dig +short <host>`, then correct or drop it; "Connection refused" — nothing on that port, check
+  `nc -z -v <host> <port>`; "TLS handshake"/"wrong version number" — scheme/port mismatch, flip
+  http/https; timeout — filtered or unreachable from the sandbox.
+- NEVER treat these as target behavior: not a finding, not evidence, not a WAF, not a server
+  error. Fix the url/host/port/scheme and retry, or move on — do not keep re-requesting a dead host.
 
 PROGRAMMING:
 - Python 3, uv, Node.js/npm
