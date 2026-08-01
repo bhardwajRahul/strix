@@ -9,6 +9,7 @@ from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
+from agents.exceptions import MaxTurnsExceeded
 from agents.items import MessageOutputItem
 from agents.memory import SQLiteSession
 from agents.tool_context import ToolContext
@@ -784,4 +785,149 @@ async def test_run_agent_loop_seeds_identity_before_first_cycle(
     # The identity/task survives the first-turn crash, so a revival can resume it.
     stored = await session.get_items()
     assert any("recon" in str(cast("dict[str, Any]", i).get("content", "")) for i in stored)
+    session.close()
+
+
+def _scripted_cycle(
+    coordinator: AgentCoordinator,
+    agent_id: str,
+    statuses: list[str],
+    calls: list[Any],
+) -> Any:
+    """Fake run cycle that leaves ``agent_id`` in a scripted status per call."""
+
+    async def _cycle(*_args: Any, **kwargs: Any) -> Any:
+        calls.append(kwargs.get("input_data"))
+        status = statuses[min(len(calls) - 1, len(statuses) - 1)]
+        await coordinator.set_status(agent_id, status)
+        return MagicMock(final_output="plain text, no tool call")
+
+    return _cycle
+
+
+async def _drive(
+    coordinator: AgentCoordinator,
+    agent_id: str,
+    *,
+    interactive: bool,
+    max_turns: int = 5,
+) -> Any:
+    return await execution._run_until_lifecycle(
+        MagicMock(),
+        coordinator,
+        agent_id,
+        initial_input=[],
+        run_config=MagicMock(),
+        context={"agent_id": agent_id, "parent_id": None},
+        max_turns=max_turns,
+        session=None,
+        interactive=interactive,
+        event_sink=None,
+        hooks=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_interactive_text_only_turn_is_nudged_instead_of_parking(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A no-tool-call turn must not silently hand control back to the user."""
+    coordinator = AgentCoordinator()
+    await coordinator.register("root", "strix", parent_id=None)
+    calls: list[Any] = []
+    monkeypatch.setattr(
+        execution,
+        "_run_cycle_parked",
+        _scripted_cycle(coordinator, "root", ["running", "completed"], calls),
+    )
+
+    await _drive(coordinator, "root", interactive=True)
+
+    assert len(calls) == 2
+    # The retry carries an explicit "call a tool" nudge rather than empty input.
+    nudge = calls[1][0]["content"]
+    assert "without a tool call" in nudge
+    assert "wait_for_message" in nudge
+    assert coordinator.statuses["root"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_interactive_wait_for_message_parks_without_a_nudge(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``waiting`` is now only reachable by an explicit wait_for_message call."""
+    coordinator = AgentCoordinator()
+    await coordinator.register("root", "strix", parent_id=None)
+    calls: list[Any] = []
+    monkeypatch.setattr(
+        execution,
+        "_run_cycle_parked",
+        _scripted_cycle(coordinator, "root", ["waiting"], calls),
+    )
+
+    await _drive(coordinator, "root", interactive=True)
+
+    assert len(calls) == 1
+    assert coordinator.statuses["root"] == "waiting"
+
+
+@pytest.mark.asyncio
+async def test_interactive_recovery_exhaustion_parks_instead_of_crashing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A human can resume an interactive scan, so exhaustion parks rather than dies."""
+    coordinator = AgentCoordinator()
+    await coordinator.register("root", "strix", parent_id=None)
+    calls: list[Any] = []
+    monkeypatch.setattr(
+        execution,
+        "_run_cycle_parked",
+        _scripted_cycle(coordinator, "root", ["running"], calls),
+    )
+
+    await _drive(coordinator, "root", interactive=True)
+
+    assert len(calls) == execution._INTERACTIVE_TOOL_RECOVERY_LIMIT
+    assert coordinator.statuses["root"] == "waiting"
+
+
+@pytest.mark.asyncio
+async def test_noninteractive_recovery_exhaustion_crashes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No user is present to resume an autonomous run, so it still fails loudly."""
+    coordinator = AgentCoordinator()
+    await coordinator.register("root", "strix", parent_id=None)
+    calls: list[Any] = []
+    monkeypatch.setattr(
+        execution,
+        "_run_cycle",
+        _scripted_cycle(coordinator, "root", ["running"], calls),
+    )
+
+    with pytest.raises(MaxTurnsExceeded):
+        await _drive(coordinator, "root", interactive=False, max_turns=2)
+
+    assert len(calls) == 2
+    assert coordinator.statuses["root"] == "crashed"
+
+
+@pytest.mark.asyncio
+async def test_tool_required_message_is_persisted_to_the_session(tmp_path: Any) -> None:
+    session = SQLiteSession("root", tmp_path / "agents.db")
+
+    assert (
+        await execution._append_tool_required_message(
+            session=session,
+            context={"parent_id": None},
+            attempt=1,
+            limit=3,
+            interactive=True,
+        )
+        == []
+    )
+
+    stored = [cast("dict[str, Any]", i) for i in await session.get_items()]
+    assert "finish_scan" in stored[0]["content"]
+    assert "wait_for_message" in stored[0]["content"]
     session.close()

@@ -208,22 +208,8 @@ async def run_agent_loop(
         await coordinator.send(agent_id, _reserve_notice())
 
     if not (start_parked and interactive):
-        if interactive:
-            with contextlib.suppress(BudgetPausedError):
-                result = await _run_cycle_parked(
-                    agent,
-                    coordinator,
-                    agent_id,
-                    input_data=first_cycle_input,
-                    run_config=run_config,
-                    context=context,
-                    max_turns=max_turns,
-                    session=session,
-                    event_sink=event_sink,
-                    hooks=hooks,
-                )
-        else:
-            result = await _run_noninteractive_until_lifecycle(
+        with contextlib.suppress(BudgetPausedError):
+            result = await _run_until_lifecycle(
                 agent,
                 coordinator,
                 agent_id,
@@ -232,6 +218,7 @@ async def run_agent_loop(
                 context=context,
                 max_turns=max_turns,
                 session=session,
+                interactive=interactive,
                 event_sink=event_sink,
                 hooks=hooks,
             )
@@ -268,15 +255,16 @@ async def run_agent_loop(
 
         await coordinator.consume_pending(agent_id)
         with contextlib.suppress(BudgetPausedError):
-            result = await _run_cycle_parked(
+            result = await _run_until_lifecycle(
                 agent,
                 coordinator,
                 agent_id,
-                input_data=[],
+                initial_input=[],
                 run_config=run_config,
                 context=context,
                 max_turns=max_turns,
                 session=session,
+                interactive=True,
                 event_sink=event_sink,
                 hooks=hooks,
             )
@@ -427,7 +415,10 @@ async def respawn_subagents(
                 await coordinator.set_status(child_id, "crashed")
 
 
-async def _run_noninteractive_until_lifecycle(
+_INTERACTIVE_TOOL_RECOVERY_LIMIT = 3
+
+
+async def _run_until_lifecycle(
     agent: Any,
     coordinator: AgentCoordinator,
     agent_id: str,
@@ -437,14 +428,21 @@ async def _run_noninteractive_until_lifecycle(
     context: dict[str, Any],
     max_turns: int,
     session: Session | None,
+    interactive: bool,
     event_sink: StreamEventSink | None,
     hooks: RunHooks[dict[str, Any]] | None,
 ) -> RunResultBase | None:
-    """Non-chat mode keeps running until finish_scan / agent_finish settles status."""
+    """Drive an agent until an explicit lifecycle tool settles its status.
+
+    A turn that ends without ``finish_scan``, ``agent_finish``, or
+    ``wait_for_message`` leaves the agent ``running``: plain text never
+    terminates a run and never yields to the user. Such a turn is nudged back
+    into a tool call, bounded by a recovery limit.
+    """
     result: RunResultBase | None = None
     input_data: Any = initial_input
-    invalid_final_outputs = 0
-    invalid_final_output_limit = max(1, max_turns)
+    recoveries = 0
+    recovery_limit = _INTERACTIVE_TOOL_RECOVERY_LIMIT if interactive else max(1, max_turns)
 
     while True:
         if coordinator.budget_stopped:
@@ -455,48 +453,87 @@ async def _run_noninteractive_until_lifecycle(
             await coordinator.set_status(agent_id, "stopped")
             raise SubagentBudgetReservedError("scan reached the sub-agent budget reserve")
 
-        result = await _run_cycle(
-            agent,
-            coordinator,
-            agent_id,
-            input_data=input_data,
-            run_config=run_config,
-            context=context,
-            max_turns=max_turns,
-            session=session,
-            interactive=False,
-            event_sink=event_sink,
-            hooks=hooks,
-        )
+        if interactive:
+            result = await _run_cycle_parked(
+                agent,
+                coordinator,
+                agent_id,
+                input_data=input_data,
+                run_config=run_config,
+                context=context,
+                max_turns=max_turns,
+                session=session,
+                event_sink=event_sink,
+                hooks=hooks,
+            )
+        else:
+            result = await _run_cycle(
+                agent,
+                coordinator,
+                agent_id,
+                input_data=input_data,
+                run_config=run_config,
+                context=context,
+                max_turns=max_turns,
+                session=session,
+                interactive=False,
+                event_sink=event_sink,
+                hooks=hooks,
+            )
 
         status = await _agent_status(coordinator, agent_id)
         if status != "running":
             return result
 
-        invalid_final_outputs += 1
+        recoveries += 1
         logger.warning(
-            "agent %s produced non-lifecycle final output in non-interactive mode; "
+            "agent %s ended a turn without a lifecycle tool call (interactive=%s); "
             "forcing tool continuation (%d/%d): %s",
             agent_id,
-            invalid_final_outputs,
-            invalid_final_output_limit,
+            interactive,
+            recoveries,
+            recovery_limit,
             _final_output_preview(result),
         )
 
-        if invalid_final_outputs >= invalid_final_output_limit:
-            await coordinator.set_status(agent_id, "crashed")
-            await _notify_parent_on_terminal(coordinator, agent_id, "crashed")
-            raise MaxTurnsExceeded(
-                "Agent exhausted non-interactive recovery attempts without calling "
-                "finish_scan or agent_finish."
-            )
+        if recoveries >= recovery_limit:
+            return await _exhausted_recovery(coordinator, agent_id, result, interactive=interactive)
 
-        input_data = await _append_noninteractive_tool_required_message(
+        input_data = await _append_tool_required_message(
             session=session,
             context=context,
-            attempt=invalid_final_outputs,
-            limit=invalid_final_output_limit,
+            attempt=recoveries,
+            limit=recovery_limit,
+            interactive=interactive,
         )
+
+
+async def _exhausted_recovery(
+    coordinator: AgentCoordinator,
+    agent_id: str,
+    result: RunResultBase | None,
+    *,
+    interactive: bool,
+) -> RunResultBase | None:
+    """Settle an agent that never recovered into a tool call.
+
+    Interactive runs park instead of dying: a human is present, so the scan
+    stays resumable by sending another message. Autonomous runs have nobody to
+    resume them, so they fail loudly.
+    """
+    if not interactive:
+        await coordinator.set_status(agent_id, "crashed")
+        await _notify_parent_on_terminal(coordinator, agent_id, "crashed")
+        raise MaxTurnsExceeded(
+            "Agent exhausted recovery attempts without calling finish_scan or agent_finish."
+        )
+
+    logger.warning(
+        "agent %s exhausted tool-call recovery attempts; parking until a message arrives",
+        agent_id,
+    )
+    await coordinator.set_status(agent_id, "waiting")
+    return result
 
 
 _WAITING_AUTO_RESUME_TIMEOUT_S = 600.0
@@ -724,25 +761,7 @@ async def _run_cycle(  # noqa: PLR0912, PLR0915
             await _notify_parent_on_terminal(coordinator, agent_id, status)
             return None
         else:
-            await _settle_run_result(coordinator, agent_id, interactive)
             return cast("RunResultBase | None", stream)
-
-
-async def _settle_run_result(
-    coordinator: AgentCoordinator,
-    agent_id: str,
-    interactive: bool,
-) -> None:
-    async with coordinator._lock:
-        current_status = coordinator.statuses.get(agent_id)
-
-    if current_status != "running":
-        return
-
-    if not interactive:
-        return
-
-    await coordinator.set_status(agent_id, "waiting")
 
 
 async def _agent_status(coordinator: AgentCoordinator, agent_id: str) -> Status | None:
@@ -760,23 +779,36 @@ def _final_output_preview(result: RunResultBase | None) -> str:
     return text[:300]
 
 
-async def _append_noninteractive_tool_required_message(
+async def _append_tool_required_message(
     *,
     session: Session | None,
     context: dict[str, Any],
     attempt: int,
     limit: int,
+    interactive: bool,
 ) -> list[dict[str, str]]:
     finish_tool = "finish_scan" if context.get("parent_id") is None else "agent_finish"
-    message = (
-        "Your previous response ended the autonomous Strix run without a lifecycle tool call. "
-        "That is invalid in non-interactive mode; plain text final answers are ignored. "
-        "Continue immediately and call exactly one tool. "
-        f"If your work is complete, call {finish_tool}. "
-        "If you are blocked waiting for another agent, call wait_for_message. "
-        "Otherwise use the appropriate execution or planning tool. "
-        f"This is recovery attempt {attempt}/{limit}."
-    )
+    if interactive:
+        message = (
+            "Your previous message ended a turn without a tool call. Plain text never ends "
+            "execution and never hands control to the user: it is shown to the user, and the "
+            "run continues. Continue immediately and call exactly one tool. "
+            "If you have finished responding and want the user's next message, call "
+            "wait_for_message. "
+            f"If the whole engagement is complete, call {finish_tool}. "
+            "Otherwise use the appropriate execution or planning tool. "
+            f"This is recovery attempt {attempt}/{limit}."
+        )
+    else:
+        message = (
+            "Your previous response ended the autonomous Strix run without a lifecycle tool "
+            "call. That is invalid in non-interactive mode; plain text final answers are "
+            "ignored. Continue immediately and call exactly one tool. "
+            f"If your work is complete, call {finish_tool}. "
+            "If you are blocked waiting for another agent, call wait_for_message. "
+            "Otherwise use the appropriate execution or planning tool. "
+            f"This is recovery attempt {attempt}/{limit}."
+        )
     item = {"role": "user", "content": message}
     if session is None:
         return [item]

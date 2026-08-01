@@ -232,11 +232,19 @@ async def wait_for_message(  # noqa: PLR0911
     message arrives, so pick a ``timeout_seconds`` proportional to the
     work you're awaiting.
 
+    In an interactive/chat session this is also the ONLY sanctioned way
+    to hand control back to the user: plain text does not end your turn
+    or yield to the user, so after you answer the user (or when you need
+    their input before continuing) call this to park until their next
+    message arrives.
+
     **Critical caveats:**
 
-    - **Never** call this if you finished your own task and have **no**
-      child agents running — that's a permanent stall. Call
-      ``finish_scan`` (root) or ``agent_finish`` (subagent) instead.
+    - In an autonomous (non-interactive) run, **never** call this if you
+      finished your own task and have **no** child agents running — that's a
+      permanent stall. Call ``finish_scan`` (root) or ``agent_finish``
+      (subagent) instead. (In an interactive session there is always a user
+      who can message you, so parking to await the user is expected.)
     - If you're waiting on an agent that **isn't your child**, message
       it first asking it to ping you when done — otherwise it has no
       reason to send to your inbox and you'll wait the full timeout.
