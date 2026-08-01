@@ -537,6 +537,10 @@ async def _exhausted_recovery(
         agent_id,
     )
     await coordinator.set_status(agent_id, "waiting")
+    # The user talks to the root, so parking is only self-service there. A parked
+    # subagent owes its parent a report it can no longer send, and the parent would
+    # otherwise wait out its full timeout for a message that is never coming.
+    await _notify_parent_on_stall(coordinator, agent_id)
     return result
 
 
@@ -837,6 +841,36 @@ _TERMINAL_NOTICE = {
         "on this child; account for its capped subtask and continue."
     ),
 }
+
+
+_STALL_NOTICE = (
+    "[Agent stalled] {name} ({agent_id}) kept ending turns without a tool call and is "
+    "parked until it receives a message. It will not send a completion report on its "
+    "own: either message it with a concrete next step to unblock it, or stop waiting on "
+    "it and account for its unfinished subtask."
+)
+
+
+async def _notify_parent_on_stall(
+    coordinator: AgentCoordinator,
+    agent_id: str,
+) -> None:
+    """Tell the parent that a child parked mid-task, so it stops waiting blindly."""
+    async with coordinator._lock:
+        parent = coordinator.parent_of.get(agent_id)
+        name = coordinator.names.get(agent_id, agent_id)
+    if parent is None:
+        return
+    await coordinator.send(
+        parent,
+        {
+            "from": agent_id,
+            "type": "stalled",
+            "priority": "high",
+            "content": _STALL_NOTICE.format(name=name, agent_id=agent_id),
+        },
+        interrupt=False,
+    )
 
 
 async def _notify_parent_on_terminal(

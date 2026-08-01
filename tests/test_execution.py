@@ -892,6 +892,54 @@ async def test_interactive_recovery_exhaustion_parks_instead_of_crashing(
 
 
 @pytest.mark.asyncio
+async def test_interactive_subagent_exhaustion_tells_its_parent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The user only talks to the root, so a parked child must report up.
+
+    Otherwise a parent blocked in wait_for_message burns its whole timeout
+    waiting for a completion report the child can no longer send.
+    """
+    coordinator = AgentCoordinator()
+    await coordinator.register("root", "strix", parent_id=None)
+    await coordinator.register("child", "recon", parent_id="root")
+    calls: list[Any] = []
+    monkeypatch.setattr(
+        execution,
+        "_run_cycle_parked",
+        _scripted_cycle(coordinator, "child", ["running"], calls),
+    )
+
+    await _drive(coordinator, "child", interactive=True)
+
+    assert coordinator.statuses["child"] == "waiting"
+    pending, items = await coordinator.consume_pending("root", include_items=True)
+    assert pending == 1
+    notice = str(items[0])
+    assert "child" in notice
+    assert "parked" in notice
+
+
+@pytest.mark.asyncio
+async def test_interactive_root_exhaustion_notifies_nobody(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A parked root is self-service: the user is already watching it."""
+    coordinator = AgentCoordinator()
+    await coordinator.register("root", "strix", parent_id=None)
+    monkeypatch.setattr(
+        execution,
+        "_run_cycle_parked",
+        _scripted_cycle(coordinator, "root", ["running"], []),
+    )
+
+    await _drive(coordinator, "root", interactive=True)
+
+    pending, _ = await coordinator.consume_pending("root")
+    assert pending == 0
+
+
+@pytest.mark.asyncio
 async def test_noninteractive_recovery_exhaustion_crashes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
