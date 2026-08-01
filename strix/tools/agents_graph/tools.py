@@ -218,11 +218,18 @@ def _session_items_payload(items: list[Any]) -> list[dict[str, Any]]:
     return payload
 
 
-@function_tool(timeout=601)
+_WAIT_DEFAULT_TIMEOUT_S = 300
+# Enforced by the SDK around the whole tool call, so it caps an oversized
+# ``timeout_seconds`` the model asks for. One second of headroom lets the
+# tool's own timeout fire first and return a clean result.
+_WAIT_HARD_CEILING_S = _WAIT_DEFAULT_TIMEOUT_S + 1
+
+
+@function_tool(timeout=_WAIT_HARD_CEILING_S)
 async def wait_for_message(  # noqa: PLR0911
     ctx: RunContextWrapper,
     reason: str = "Waiting for messages from other agents",
-    timeout_seconds: int = 600,
+    timeout_seconds: int = _WAIT_DEFAULT_TIMEOUT_S,
 ) -> str:
     """Pause this agent until a message lands in its inbox (or timeout).
 
@@ -255,7 +262,8 @@ async def wait_for_message(  # noqa: PLR0911
         reason: One-line note shown in graph snapshots while you're
             waiting (helps a human or sibling agent debug who's stuck
             on what).
-        timeout_seconds: Max seconds to wait (default 600). This is only
+        timeout_seconds: Max seconds to wait (default 300, and values above
+            that are cut short by a hard ceiling). This is only
             a cap — the tool returns the INSTANT a message arrives, so a
             larger value never makes you wait longer when the reply does
             come. Right-size it to what you're waiting on: a short wait

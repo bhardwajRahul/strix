@@ -540,7 +540,7 @@ async def _exhausted_recovery(
     return result
 
 
-_WAITING_AUTO_RESUME_TIMEOUT_S = 600.0
+_WAITING_AUTO_RESUME_TIMEOUT_S = 300.0
 
 
 async def _plain_waiting_timeout(
