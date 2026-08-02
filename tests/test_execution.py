@@ -22,7 +22,7 @@ from strix.core.execution import (
     notify_parent_on_terminal,
 )
 from strix.core.sessions import seed_initial_input
-from strix.tools.agents_graph.tools import agent_finish
+from strix.tools.agents_graph.tools import agent_finish, stop_agent
 from strix.tools.finish.tool import finish_scan
 
 
@@ -84,6 +84,22 @@ async def _call_agent_finish(
     result: str = await agent_finish.on_invoke_tool(
         ctx,
         json.dumps({"result_summary": "done", "report_to_parent": report_to_parent}),
+    )
+    parsed: dict[str, Any] = json.loads(result)
+    return parsed
+
+
+async def _call_stop_agent(
+    coordinator: AgentCoordinator, agent_id: str, target_agent_id: str
+) -> dict[str, Any]:
+    ctx = ToolContext(
+        context={"coordinator": coordinator, "agent_id": agent_id},
+        tool_name="stop_agent",
+        tool_call_id="call-1",
+        tool_arguments="{}",
+    )
+    result: str = await stop_agent.on_invoke_tool(
+        ctx, json.dumps({"target_agent_id": target_agent_id})
     )
     parsed: dict[str, Any] = json.loads(result)
     return parsed
@@ -545,6 +561,38 @@ async def test_agent_finish_report_suppresses_the_terminal_notice(tmp_path: Any)
     await execution._notify_parent_on_exit(coordinator, "child")
 
     assert coordinator.pending_counts.get("root", 0) == 1
+    session.close()
+
+
+@pytest.mark.asyncio
+async def test_stop_agent_notifies_a_parent_that_is_not_the_stopper(tmp_path: Any) -> None:
+    coordinator = AgentCoordinator()
+    await coordinator.register("root", "strix", parent_id=None)
+    await coordinator.register("child", "recon", parent_id="root")
+    await coordinator.register("grandchild", "sqli", parent_id="child")
+    session = SQLiteSession("child", tmp_path / "agents.db")
+    await coordinator.attach_runtime("child", session=session)
+
+    await _call_stop_agent(coordinator, "root", "grandchild")
+
+    assert coordinator.statuses["grandchild"] == "stopped"
+    assert coordinator.pending_counts.get("child", 0) == 1
+    # The stopper already knows; only the waiting parent needs telling.
+    assert coordinator.pending_counts.get("root", 0) == 0
+    session.close()
+
+
+@pytest.mark.asyncio
+async def test_stop_agent_does_not_notify_the_stopping_parent(tmp_path: Any) -> None:
+    coordinator = AgentCoordinator()
+    await coordinator.register("root", "strix", parent_id=None)
+    await coordinator.register("child", "recon", parent_id="root")
+    session = SQLiteSession("root", tmp_path / "agents.db")
+    await coordinator.attach_runtime("root", session=session)
+
+    await _call_stop_agent(coordinator, "root", "child")
+
+    assert coordinator.pending_counts.get("root", 0) == 0
     session.close()
 
 

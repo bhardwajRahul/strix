@@ -866,9 +866,9 @@ _TERMINAL_NOTICE = {
         "message it again."
     ),
     "stopped": (
-        "[Agent capped] {name} ({agent_id}) hit its turn limit and was stopped "
-        "before finishing. It will not send a completion report, so stop waiting "
-        "on this child; account for its capped subtask and continue."
+        "[Agent stopped] {name} ({agent_id}) was stopped before finishing (turn limit "
+        "or an explicit stop). It will not send a completion report, so stop waiting "
+        "on this child; account for its unfinished subtask and continue."
     ),
 }
 

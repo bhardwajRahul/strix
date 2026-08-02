@@ -383,12 +383,15 @@ class AgentCoordinator:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 
-    async def cancel_descendants_graceful(self, agent_id: str) -> None:
+    async def cancel_descendants_graceful(self, agent_id: str) -> list[str]:
+        """Stop a subtree leaves-first and report which agents were stopped."""
         async with self._lock:
             order = self._subtree_order_locked(agent_id)
-        for aid in reversed(order):
+        stopped = list(reversed(order))
+        for aid in stopped:
             await self.request_stop(aid)
         await self._maybe_snapshot()
+        return stopped
 
     async def attach_stream(
         self,

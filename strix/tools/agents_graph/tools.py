@@ -685,9 +685,16 @@ async def stop_agent(
         )
 
     if cascade:
-        await coordinator.cancel_descendants_graceful(target_agent_id)
+        stopped = await coordinator.cancel_descendants_graceful(target_agent_id)
     else:
         await coordinator.request_stop(target_agent_id)
+        stopped = [target_agent_id]
+
+    # The stopper knows what it just did; anyone else waiting on those agents does not.
+    async with coordinator._lock:
+        orphaned = [aid for aid in stopped if coordinator.parent_of.get(aid) not in (None, me)]
+    for aid in orphaned:
+        await notify_parent_on_terminal(coordinator, aid, "stopped")
 
     logger.info(
         "stop_agent: target=%s cascade=%s reason=%r",
