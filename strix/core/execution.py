@@ -539,7 +539,7 @@ async def _exhausted_recovery(
     """
     if not interactive:
         await coordinator.set_status(agent_id, "crashed")
-        await _notify_parent_on_terminal(coordinator, agent_id, "crashed")
+        await notify_parent_on_terminal(coordinator, agent_id, "crashed")
         raise MaxTurnsExceeded(
             "Agent exhausted recovery attempts without calling finish_scan or agent_finish."
         )
@@ -622,7 +622,7 @@ async def _run_cycle_parked(
     except Exception as exc:
         logger.exception("error escaped the run cycle for %s; parking as failed", agent_id)
         await coordinator.set_status(agent_id, "failed", error=str(exc) or type(exc).__name__)
-        await _notify_parent_on_terminal(coordinator, agent_id, "failed")
+        await notify_parent_on_terminal(coordinator, agent_id, "failed")
         return None
 
 
@@ -778,7 +778,7 @@ async def _run_cycle(  # noqa: PLR0912, PLR0915
             if isinstance(exc, ProviderRefusalError):
                 logger.warning("agent %s refused by the model provider: %s", agent_id, exc)
                 await coordinator.set_status(agent_id, "failed", error=str(exc))
-                await _notify_parent_on_terminal(coordinator, agent_id, "failed")
+                await notify_parent_on_terminal(coordinator, agent_id, "failed")
                 return None
             if not interactive:
                 raise
@@ -790,7 +790,7 @@ async def _run_cycle(  # noqa: PLR0912, PLR0915
                 status = "crashed"
             logger.exception("agent run failed for %s; parking as %s", agent_id, status)
             await coordinator.set_status(agent_id, status, error=str(exc) or type(exc).__name__)
-            await _notify_parent_on_terminal(coordinator, agent_id, status)
+            await notify_parent_on_terminal(coordinator, agent_id, status)
             return None
         else:
             return cast("RunResultBase | None", stream)
@@ -851,6 +851,11 @@ async def _append_tool_required_message(
 
 
 _TERMINAL_NOTICE = {
+    "completed": (
+        "[Agent completed] {name} ({agent_id}) finished and is no longer running, but it "
+        "sent no completion report. Stop waiting on this child; ask it directly if you "
+        "need its results."
+    ),
     "crashed": (
         "[Agent crash] {name} ({agent_id}) terminated unexpectedly. "
         "Stop waiting on this child unless you want to message it again."
@@ -898,7 +903,7 @@ async def _notify_parent_on_stall(
     )
 
 
-async def _notify_parent_on_terminal(
+async def notify_parent_on_terminal(
     coordinator: AgentCoordinator,
     agent_id: str,
     status: str,
@@ -910,6 +915,8 @@ async def _notify_parent_on_terminal(
         parent = coordinator.parent_of.get(agent_id)
         name = coordinator.names.get(agent_id, agent_id)
     if parent is None:
+        return
+    if not await coordinator.claim_parent_notice(agent_id):
         return
     await coordinator.send(
         parent,
@@ -943,6 +950,21 @@ async def _notify_root_on_budget_reserve(coordinator: AgentCoordinator) -> None:
     if root is None:
         return
     await coordinator.send(root, _reserve_notice())
+
+
+async def _notify_parent_on_exit(
+    coordinator: AgentCoordinator,
+    agent_id: str,
+) -> None:
+    """Backstop for a child whose loop ended without telling its parent.
+
+    Every terminal state counts, including ``completed``: a child that skips its
+    completion report leaves the parent waiting on a message nobody will send.
+    """
+    status = await _agent_status(coordinator, agent_id)
+    if status is None:
+        return
+    await notify_parent_on_terminal(coordinator, agent_id, status)
 
 
 async def _start_child_runner(
@@ -998,6 +1020,9 @@ async def _start_child_runner(
             logger.info("child %s stopped after reaching the scan budget limit", child_id)
         except SubagentBudgetReservedError:
             logger.info("child %s stopped at the sub-agent budget reserve", child_id)
+        finally:
+            if not coordinator.is_shutting_down:
+                await _notify_parent_on_exit(coordinator, child_id)
 
     task_handle = asyncio.create_task(_child_loop(), name=f"agent-{name}-{child_id}")
     await coordinator.attach_runtime(child_id, task=task_handle)

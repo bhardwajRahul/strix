@@ -55,6 +55,7 @@ class AgentCoordinator:
         self.idle_resume_counts: dict[str, int] = {}
         self.wait_kinds: dict[str, WaitKind] = {}
         self.runtimes: dict[str, AgentRuntime] = {}
+        self._parent_notified: set[str] = set()
         self._lock = asyncio.Lock()
         self._snapshot_path: Path | None = None
         self.is_shutting_down = False
@@ -191,6 +192,7 @@ class AgentCoordinator:
                 self.errors.pop(agent_id, None)
                 self.wait_kinds.pop(agent_id, None)
                 self.runtimes.setdefault(agent_id, AgentRuntime()).user_wake_required = False
+                self._parent_notified.discard(agent_id)
         await self._maybe_snapshot()
 
     async def park_waiting(self, agent_id: str, *, wait_kind: WaitKind) -> None:
@@ -252,11 +254,26 @@ class AgentCoordinator:
                 self.errors[agent_id] = error
             elif status == "running":
                 self.errors.pop(agent_id, None)
+            if status == "running":
+                # Running again means a fresh stint that owes its parent its own notice.
+                self._parent_notified.discard(agent_id)
             runtime = self.runtimes.setdefault(agent_id, AgentRuntime())
             runtime.user_wake_required = status in {"failed", "crashed"}
             runtime.wake.set()
         logger.info("agent.status %s=%s", agent_id, status)
         await self._maybe_snapshot()
+
+    async def claim_parent_notice(self, agent_id: str) -> bool:
+        """Reserve the one notice a child owes its parent when it stops running.
+
+        A completion report and a terminal notice carry the same information, so
+        whichever comes first claims the slot and the other is skipped.
+        """
+        async with self._lock:
+            if agent_id in self._parent_notified:
+                return False
+            self._parent_notified.add(agent_id)
+            return True
 
     async def send(
         self, target_agent_id: str, message: dict[str, Any], *, interrupt: bool = True

@@ -18,10 +18,11 @@ from openai.types.responses import ResponseOutputMessage, ResponseOutputRefusal
 from strix.core import execution
 from strix.core.agents import AgentCoordinator
 from strix.core.execution import (
-    _notify_parent_on_terminal,
     _notify_root_on_budget_reserve,
+    notify_parent_on_terminal,
 )
 from strix.core.sessions import seed_initial_input
+from strix.tools.agents_graph.tools import agent_finish
 from strix.tools.finish.tool import finish_scan
 
 
@@ -63,6 +64,27 @@ async def _call_finish_scan(
     )
     fields = ("executive_summary", "methodology", "technical_analysis", "recommendations")
     result: str = await finish_scan.on_invoke_tool(ctx, json.dumps(dict.fromkeys(fields, "x")))
+    parsed: dict[str, Any] = json.loads(result)
+    return parsed
+
+
+async def _call_agent_finish(
+    coordinator: AgentCoordinator,
+    agent_id: str,
+    parent_id: str | None,
+    *,
+    report_to_parent: bool,
+) -> dict[str, Any]:
+    ctx = ToolContext(
+        context={"coordinator": coordinator, "agent_id": agent_id, "parent_id": parent_id},
+        tool_name="agent_finish",
+        tool_call_id="call-1",
+        tool_arguments="{}",
+    )
+    result: str = await agent_finish.on_invoke_tool(
+        ctx,
+        json.dumps({"result_summary": "done", "report_to_parent": report_to_parent}),
+    )
     parsed: dict[str, Any] = json.loads(result)
     return parsed
 
@@ -466,11 +488,11 @@ async def test_snapshot_round_trip_preserves_budget_pause() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("status", ["stopped", "failed", "crashed"])
+@pytest.mark.parametrize("status", ["completed", "stopped", "failed", "crashed"])
 async def test_terminal_child_wakes_parked_parent(tmp_path: Any, status: str) -> None:
-    # Regression for #870: a child reaching a terminal state (e.g. MaxTurnsExceeded
-    # -> "stopped") must wake the parent parked in wait_for_message, so the root can
-    # finalize the scan instead of hanging for a completion report that never arrives.
+    # Regression for #870 and #947: a child reaching any terminal state - including a
+    # plain "completed" - must wake the parent parked in wait_for_agents, so the root
+    # can finalize the scan instead of hanging for a report that never arrives.
     coordinator = AgentCoordinator()
     await coordinator.register("root", "strix", parent_id=None)
     await coordinator.register("child", "SQL Injection", parent_id="root")
@@ -482,10 +504,47 @@ async def test_terminal_child_wakes_parked_parent(tmp_path: Any, status: str) ->
     assert not root_waiter.done()
 
     await coordinator.set_status("child", status, error="Max turns (500) exceeded")
-    await _notify_parent_on_terminal(coordinator, "child", status)
+    await notify_parent_on_terminal(coordinator, "child", status)
 
     await asyncio.wait_for(root_waiter, timeout=1.0)
     assert coordinator.pending_counts.get("root", 0) > 0
+    session.close()
+
+
+@pytest.mark.asyncio
+async def test_agent_finish_without_report_still_wakes_parent(tmp_path: Any) -> None:
+    # Regression for #947: a child that completes with report_to_parent=False owes its
+    # parent a terminal notice, otherwise the parent waits out its full timeout.
+    coordinator = AgentCoordinator()
+    await coordinator.register("root", "strix", parent_id=None)
+    await coordinator.register("child", "recon", parent_id="root")
+    session = SQLiteSession("root", tmp_path / "agents.db")
+    await coordinator.attach_runtime("root", session=session)
+
+    root_waiter = asyncio.create_task(coordinator.wait_for_message("root"))
+    await asyncio.sleep(0)
+
+    await _call_agent_finish(coordinator, "child", "root", report_to_parent=False)
+
+    await asyncio.wait_for(root_waiter, timeout=1.0)
+    assert coordinator.statuses["child"] == "completed"
+    assert coordinator.pending_counts.get("root", 0) == 1
+    session.close()
+
+
+@pytest.mark.asyncio
+async def test_agent_finish_report_suppresses_the_terminal_notice(tmp_path: Any) -> None:
+    coordinator = AgentCoordinator()
+    await coordinator.register("root", "strix", parent_id=None)
+    await coordinator.register("child", "recon", parent_id="root")
+    session = SQLiteSession("root", tmp_path / "agents.db")
+    await coordinator.attach_runtime("root", session=session)
+
+    await _call_agent_finish(coordinator, "child", "root", report_to_parent=True)
+    # The exit backstop must not duplicate the report the child already delivered.
+    await execution._notify_parent_on_exit(coordinator, "child")
+
+    assert coordinator.pending_counts.get("root", 0) == 1
     session.close()
 
 
@@ -497,7 +556,7 @@ async def test_notify_parent_on_terminal_ignores_non_terminal_status(tmp_path: A
     session = SQLiteSession("root", tmp_path / "agents.db")
     await coordinator.attach_runtime("root", session=session)
 
-    await _notify_parent_on_terminal(coordinator, "child", "waiting")
+    await notify_parent_on_terminal(coordinator, "child", "waiting")
 
     assert coordinator.pending_counts.get("root", 0) == 0
     session.close()
@@ -523,7 +582,7 @@ async def test_terminal_notice_does_not_cancel_parent_stream(tmp_path: Any) -> N
     await coordinator.attach_runtime("root", session=session, interrupt_on_message=True)
     await coordinator.attach_stream("root", stream)
 
-    await _notify_parent_on_terminal(coordinator, "child", "crashed")
+    await notify_parent_on_terminal(coordinator, "child", "crashed")
 
     assert stream.cancelled is False
     assert coordinator.pending_counts.get("root", 0) > 0
