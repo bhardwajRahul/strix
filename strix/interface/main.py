@@ -33,12 +33,11 @@ from strix.interface.update_check import (
 from strix.interface.utils import (
     assign_workspace_subdirs,
     build_final_stats_text,
-    build_mount_targets_info,
     check_docker_connection,
+    check_mountable_dir,
     clone_repository,
     collect_local_sources,
     dedupe_local_targets,
-    find_oversized_local_targets,
     generate_run_name,
     image_exists,
     infer_target_type,
@@ -524,9 +523,6 @@ Examples:
   # Local code analysis
   strix --target ./my-project
 
-  # Large local repository (bind-mounted read-only instead of copied)
-  strix --mount ./huge-monorepo
-
   # Domain penetration test
   strix --target example.com
 
@@ -570,8 +566,9 @@ Examples:
         type=str,
         action="append",
         help="Target to test (URL, repository, local directory path, domain name, or IP address). "
+        "Local directories are mounted into the sandbox writable. "
         "Can be specified multiple times for multi-target scans. "
-        "Fresh runs require at least one of --target, --target-list, or --mount.",
+        "Fresh runs require --target or --target-list.",
     )
     parser.add_argument(
         "--target-list",
@@ -580,15 +577,6 @@ Examples:
         metavar="PATH",
         help="Path to a file containing targets, one per non-empty, non-comment line. "
         "Can be specified multiple times and combined with --target.",
-    )
-    parser.add_argument(
-        "--mount",
-        type=str,
-        action="append",
-        metavar="PATH",
-        help="Bind-mount a local directory into the sandbox (read-only) instead of "
-        "copying it file-by-file. Use this for large repositories that are too big to "
-        "stream into the container. Can be specified multiple times.",
     )
     parser.add_argument(
         "--instruction",
@@ -720,9 +708,9 @@ Examples:
     args.user_explicit_instruction = args.instruction if args.resume else None
 
     if args.resume:
-        if args.target or args.target_list or args.mount:
+        if args.target or args.target_list:
             parser.error(
-                "Cannot combine --resume with --target/--target-list/--mount. "
+                "Cannot combine --resume with --target/--target-list. "
                 "--resume picks up where the prior run left off, including the "
                 "original target list."
             )
@@ -736,9 +724,9 @@ Examples:
                 f"or remove --resume to start over with the same targets."
             )
     else:
-        if not args.target and not args.target_list and not args.mount:
+        if not args.target and not args.target_list:
             parser.error(
-                "the following arguments are required: -t/--target, --target-list, or --mount "
+                "the following arguments are required: -t/--target or --target-list "
                 "(or use --resume <run_name> to continue a prior scan)"
             )
         args.targets_info = []
@@ -761,32 +749,13 @@ Examples:
                 args.targets_info.append(
                     {"type": target_type, "details": target_dict, "original": display_target}
                 )
-            except ValueError:
-                parser.error(f"Invalid target '{target}'")
-
-        try:
-            args.targets_info.extend(build_mount_targets_info(args.mount or []))
-        except ValueError as e:
-            parser.error(str(e))
+            except ValueError as e:
+                parser.error(f"Invalid target '{target}': {e}")
 
         args.targets_info = dedupe_local_targets(args.targets_info)
 
         assign_workspace_subdirs(args.targets_info)
         rewrite_localhost_targets(args.targets_info, HOST_GATEWAY_HOSTNAME)
-
-        max_local_copy_mb = load_settings().runtime.max_local_copy_mb
-        max_copy_bytes = max_local_copy_mb * 1024 * 1024
-        oversized = find_oversized_local_targets(args.targets_info, max_copy_bytes)
-        if oversized:
-            details = "; ".join(
-                f"{path} ({size / (1024 * 1024):.0f} MB)" for path, size in oversized
-            )
-            parser.error(
-                f"Local target too large to stream into the sandbox: {details}. "
-                f"The limit is {max_local_copy_mb} MB "
-                "(set STRIX_MAX_LOCAL_COPY_MB to change it). Re-run with "
-                "--mount <path> to bind-mount the directory instead of copying it."
-            )
 
     return args
 
@@ -839,6 +808,12 @@ def _load_resume_state(args: argparse.Namespace, parser: argparse.ArgumentParser
         if not isinstance(target, dict):
             continue
         details = target.get("details") or {}
+        if target.get("type") == "local_code" and details.get("target_path"):
+            try:
+                check_mountable_dir(Path(details["target_path"]).expanduser())
+            except ValueError as exc:
+                parser.error(f"--resume {args.resume}: {exc}")
+            continue
         if target.get("type") != "repository":
             continue
         cloned = details.get("cloned_repo_path")
@@ -853,8 +828,7 @@ def _load_resume_state(args: argparse.Namespace, parser: argparse.ArgumentParser
 
     if args.instruction is None:
         args.instruction = state.get("instruction")
-    if state.get("local_sources"):
-        args.local_sources = state.get("local_sources")
+    args.local_sources = collect_local_sources(args.targets_info)
     if state.get("diff_scope"):
         args.diff_scope = state.get("diff_scope")
     persisted_scan_mode = state.get("scan_mode")
