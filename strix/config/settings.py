@@ -26,6 +26,7 @@ class LlmSettings(BaseSettings):
     api_key: str | None = Field(
         default=None,
         validation_alias=AliasChoices("LLM_API_KEY", "OPENAI_API_KEY"),
+        repr=False,
     )
     api_base: str | None = Field(
         default=None,
@@ -40,6 +41,7 @@ class LlmSettings(BaseSettings):
     extra_headers: dict[str, str] | None = Field(
         default=None,
         alias="LLM_EXTRA_HEADERS",
+        repr=False,
     )
     reasoning_effort: ReasoningEffort = Field(default="high", alias="STRIX_REASONING_EFFORT")
     force_required_tool_choice: bool = Field(
@@ -65,11 +67,12 @@ class DedupeSettings(BaseSettings):
         default=None,
         alias="STRIX_DEDUPE_REASONING_EFFORT",
     )
-    api_key: str | None = Field(default=None, alias="DEDUPE_LLM_API_KEY")
+    api_key: str | None = Field(default=None, alias="DEDUPE_LLM_API_KEY", repr=False)
     api_base: str | None = Field(default=None, alias="DEDUPE_LLM_API_BASE")
     extra_headers: dict[str, str] | None = Field(
         default=None,
         alias="DEDUPE_LLM_EXTRA_HEADERS",
+        repr=False,
     )
 
 
@@ -114,7 +117,11 @@ class TelemetrySettings(BaseSettings):
 class IntegrationSettings(BaseSettings):
     model_config = _BASE_CONFIG
 
-    perplexity_api_key: str | None = Field(default=None, alias="PERPLEXITY_API_KEY")
+    perplexity_api_key: str | None = Field(
+        default=None,
+        alias="PERPLEXITY_API_KEY",
+        repr=False,
+    )
 
 
 class ViewerSettings(BaseSettings):

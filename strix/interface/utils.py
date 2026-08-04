@@ -252,7 +252,7 @@ def _llm_usage(report_state: Any) -> dict[str, Any]:
     return usage if isinstance(usage, dict) else {}
 
 
-def _is_subscription(report_state: Any) -> bool:
+def is_subscription_run(report_state: Any) -> bool:
     """Whether this run uses a model subscription (no metered cost).
 
     Prefers the run record so it's correct for hydrated/resumed runs; falls back
@@ -301,7 +301,7 @@ def _build_llm_usage_stats(
     *,
     live: bool = False,
 ) -> None:
-    subscription = _is_subscription(report_state)
+    subscription = is_subscription_run(report_state)
     usage = _llm_usage(report_state)
     if not usage or _int_stat(usage, "requests") <= 0:
         stats_text.append("\n")
@@ -365,7 +365,7 @@ def build_live_stats_text(report_state: Any) -> Text:
     model = load_settings().llm.model or "unknown"
     stats_text.append("Model ", style="dim")
     stats_text.append(str(model), style="white")
-    if _is_subscription(report_state):
+    if is_subscription_run(report_state):
         stats_text.append("  ·  ", style="dim white")
         stats_text.append("ChatGPT subscription", style="#22c55e")
     stats_text.append("\n")
@@ -410,7 +410,7 @@ def build_tui_stats_text(report_state: Any) -> Text:
 
     model = load_settings().llm.model or "unknown"
     stats_text.append(str(model), style="white")
-    subscription = _is_subscription(report_state)
+    subscription = is_subscription_run(report_state)
     if subscription:
         stats_text.append("\n")
         stats_text.append("ChatGPT subscription", style="#22c55e")
@@ -1092,12 +1092,12 @@ def resolve_diff_scope_context(
 def _is_http_git_repo(url: str) -> bool:
     check_url = f"{url.rstrip('/')}/info/refs?service=git-upload-pack"
     try:
-        resp = requests.get(check_url, headers={"User-Agent": "git/strix"}, timeout=10)
+        with requests.get(check_url, headers={"User-Agent": "git/strix"}, timeout=10) as resp:
+            if resp.status_code >= 400:
+                return resp.status_code == 401
+            return "x-git-upload-pack-advertisement" in resp.headers.get("Content-Type", "")
     except (requests.RequestException, ValueError):
         return False
-    if resp.status_code >= 400:
-        return resp.status_code == 401
-    return "x-git-upload-pack-advertisement" in resp.headers.get("Content-Type", "")
 
 
 def infer_target_type(target: str) -> tuple[str, dict[str, str]]:  # noqa: PLR0911
@@ -1475,43 +1475,13 @@ def clone_repository(repo_url: str, run_name: str, dest_name: str | None = None)
         return str(clone_path.absolute())
 
     except subprocess.CalledProcessError as e:
-        error_text = Text()
-        error_text.append("REPOSITORY CLONE FAILED", style="bold red")
-        error_text.append("\n\n", style="white")
-        error_text.append(f"Could not clone repository: {repo_url}\n", style="white")
-        error_text.append(
-            f"Error: {e.stderr if hasattr(e, 'stderr') and e.stderr else str(e)}", style="dim red"
-        )
-
-        panel = Panel(
-            error_text,
-            title="[bold white]STRIX",
-            title_align="left",
-            border_style="red",
-            padding=(1, 2),
-        )
-        console.print("\n")
-        console.print(panel)
-        console.print()
-        sys.exit(1)
-    except FileNotFoundError:
-        error_text = Text()
-        error_text.append("GIT NOT FOUND", style="bold red")
-        error_text.append("\n\n", style="white")
-        error_text.append("Git is not installed or not available in PATH.\n", style="white")
-        error_text.append("Please install Git to clone repositories.\n", style="white")
-
-        panel = Panel(
-            error_text,
-            title="[bold white]STRIX",
-            title_align="left",
-            border_style="red",
-            padding=(1, 2),
-        )
-        console.print("\n")
-        console.print(panel)
-        console.print()
-        sys.exit(1)
+        detail = e.stderr if hasattr(e, "stderr") and e.stderr else str(e)
+        raise ValueError(f"Could not clone repository {repo_url}: {detail}") from e
+    except FileNotFoundError as e:
+        raise ValueError(
+            "Git is not installed or not available in PATH. "
+            "Please install Git to clone repositories."
+        ) from e
 
 
 def check_docker_connection() -> Any:
