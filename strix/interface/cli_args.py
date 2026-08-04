@@ -65,6 +65,14 @@ Examples:
   # Local code analysis
   strix --target ./my-project
 
+  # API spec test (OpenAPI/Swagger file or Postman collection export)
+  strix --target ./openapi.yaml --target https://api.example.com
+  strix --target ./collection.postman_collection.json
+
+  # Postman collection pulled live by id (needs POSTMAN_API_KEY); optional environment
+  strix --target postman://<collection-uuid> --target https://api.example.com
+  strix --target "postman://<collection-uuid>?env=<environment-uuid>"
+
   # Domain penetration test
   strix --target example.com
 
@@ -107,8 +115,10 @@ Examples:
         "--target",
         type=str,
         action="append",
-        help="Target to test (URL, repository, local directory path, domain name, or IP address). "
-        "Local directories are mounted into the sandbox writable. "
+        help="Target to test: URL, repository, local directory path, domain name, IP address, "
+        "an API spec file (OpenAPI/Swagger .json/.yaml or a Postman collection export), or a "
+        "Postman collection by id (postman://<collection-uuid>[?env=<environment-uuid>], needs "
+        "POSTMAN_API_KEY). Local directories are mounted into the sandbox writable. "
         "Can be specified multiple times for multi-target scans. "
         "Fresh runs require --target or --target-list.",
     )

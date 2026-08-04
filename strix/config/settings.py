@@ -122,6 +122,11 @@ class IntegrationSettings(BaseSettings):
         alias="PERPLEXITY_API_KEY",
         repr=False,
     )
+    postman_api_key: str | None = Field(
+        default=None,
+        alias="POSTMAN_API_KEY",
+        repr=False,
+    )
 
 
 class ViewerSettings(BaseSettings):
