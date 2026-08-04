@@ -1169,3 +1169,120 @@ func TestChatContentRerendersOnWidthAndExpansionChange(t *testing.T) {
 		}
 	}
 }
+
+// A model or backend failure can be a wrapped exception hundreds of columns
+// wide and several lines long. The status row is one line of the chat column, so
+// an oversized one widens the whole column - JoinHorizontal pads every row to the
+// widest - which pushed the sidebar off screen and wrapped the frame.
+func TestLongErrorDoesNotBreakTheFrame(t *testing.T) {
+	model := New(nil)
+	model.width, model.height = 120, 24
+	model.showSplash = false
+	model.handleEnvelope(stateEnvelope(t, 1, protocol.Snapshot{ScanState: "running"}))
+	bootstrap := protocol.CollectionBootstrap{
+		Collection: "agents", Revision: 1, Cursor: 0, NextCursor: 1, Done: true,
+		Items: []json.RawMessage{rawJSON(t, protocol.Agent{ID: "a0", Name: "Strix", Status: "running"})},
+	}
+	model.handleEnvelope(protocol.Envelope{
+		Version: protocol.Version, Type: "collection_bootstrap", Payload: rawJSON(t, bootstrap),
+	})
+	model.errorText = "litellm.APIConnectionError: OpenrouterException - Connection error " +
+		"while calling https://openrouter.ai/api/v1/chat/completions: HTTPSConnectionPool" +
+		"(host='openrouter.ai', port=443): Max retries exceeded\nTraceback (most recent " +
+		"call last):\n  File \"/x/y.py\", line 42, in send\n    raise err"
+	model.resizeViewport()
+
+	lines := strings.Split(model.View(), "\n")
+	if len(lines) > model.height {
+		t.Fatalf("frame is %d rows in a %d-row terminal", len(lines), model.height)
+	}
+	for i, line := range lines {
+		if width := ansi.StringWidth(line); width > model.width {
+			t.Fatalf("row %d is %d columns in a %d-column terminal", i, width, model.width)
+		}
+	}
+	// The sidebar has to survive: its panels are the right edge of the frame.
+	if !strings.Contains(ansi.Strip(model.View()), "Strix") {
+		t.Fatal("the agent tree was pushed out of the frame")
+	}
+}
+
+func TestStatusMessageFlattensAndKeepsItsHint(t *testing.T) {
+	row := ansi.Strip(statusMessage("boom\nsecond line\twith tabs", red, " · Send message to resume", 60))
+
+	if strings.Contains(row, "\n") || strings.Contains(row, "\t") {
+		t.Fatalf("status row is not a single line: %q", row)
+	}
+	if !strings.HasSuffix(row, " · Send message to resume") {
+		t.Fatalf("the hint was lost: %q", row)
+	}
+	if !strings.Contains(row, "boom second line with tabs") {
+		t.Fatalf("the message was mangled: %q", row)
+	}
+	// A message far too long for the row keeps the hint readable.
+	long := ansi.Strip(statusMessage(strings.Repeat("x", 500), red, " · Send message to resume", 60))
+	if width := ansi.StringWidth(long); width > 60 {
+		t.Fatalf("status message is %d columns, want at most 60", width)
+	}
+	if !strings.HasSuffix(long, " · Send message to resume") {
+		t.Fatalf("the hint was clipped away: %q", long)
+	}
+}
+
+// The status row must be exactly as wide as the column it sits in, at every
+// terminal size. A narrow terminal cannot fit the quit hint alongside any status
+// text, and keeping it anyway made the row wider than the terminal.
+func TestStatusRowIsExactlyItsWidth(t *testing.T) {
+	quitHint := lipgloss.NewStyle().Foreground(white).Render("ctrl-q") +
+		lipgloss.NewStyle().Foreground(dim).Render(" quit")
+	longMessage := lipgloss.NewStyle().Foreground(red).Render(strings.Repeat("boom ", 40))
+
+	for width := 1; width <= 60; width++ {
+		for _, testCase := range []struct {
+			name        string
+			left, right string
+		}{
+			{"empty", "", ""},
+			{"hint only", "", quitHint},
+			{"long message and hint", longMessage, quitHint},
+			{"long message alone", longMessage, ""},
+		} {
+			row := composeStatusRow(testCase.left, testCase.right, width)
+			if got := ansi.StringWidth(row); got != width {
+				t.Fatalf("%s at width %d rendered %d columns: %q",
+					testCase.name, width, got, ansi.Strip(row))
+			}
+			if strings.Contains(row, "\n") {
+				t.Fatalf("%s at width %d spans rows", testCase.name, width)
+			}
+		}
+	}
+	if row := composeStatusRow("x", "y", 0); row != "" {
+		t.Fatalf("a zero-width row should be empty, got %q", row)
+	}
+}
+
+// A running scan in a narrow terminal must not wrap the frame.
+func TestNarrowTerminalKeepsTheFrameIntact(t *testing.T) {
+	for _, width := range []int{8, 10, 13, 14, 20, 40} {
+		model := New(nil)
+		model.width, model.height = width, 20
+		model.showSplash = false
+		model.handleEnvelope(stateEnvelope(t, 1, protocol.Snapshot{ScanState: "running"}))
+		bootstrap := protocol.CollectionBootstrap{
+			Collection: "agents", Revision: 1, Cursor: 0, NextCursor: 1, Done: true,
+			Items: []json.RawMessage{rawJSON(t, protocol.Agent{ID: "a0", Name: "Strix", Status: "running"})},
+		}
+		model.handleEnvelope(protocol.Envelope{
+			Version: protocol.Version, Type: "collection_bootstrap", Payload: rawJSON(t, bootstrap),
+		})
+		model.errorText = strings.Repeat("connection failed ", 20)
+		model.resizeViewport()
+
+		for i, line := range strings.Split(model.View(), "\n") {
+			if got := ansi.StringWidth(line); got > width {
+				t.Fatalf("at width %d row %d is %d columns", width, i, got)
+			}
+		}
+	}
+}

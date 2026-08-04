@@ -654,8 +654,7 @@ func (m Model) statusView(width int) string {
 		case "waiting":
 			left = lipgloss.NewStyle().Foreground(dim).Render("Send message to resume")
 			if msg := agent.ErrorMessage; msg != "" {
-				left = lipgloss.NewStyle().Foreground(red).Render(msg) +
-					lipgloss.NewStyle().Foreground(dim).Render(" · Send message to resume")
+				left = statusMessage(msg, red, " · Send message to resume", width)
 			}
 		case "budget_paused":
 			left = lipgloss.NewStyle().Foreground(amber).Render("Budget limit reached") +
@@ -670,15 +669,54 @@ func (m Model) statusView(width int) string {
 			if msg == "" {
 				msg = "Agent failed"
 			}
-			left = lipgloss.NewStyle().Foreground(red).Render(msg) +
-				lipgloss.NewStyle().Foreground(dim).Render(" · Send message to resume")
+			left = statusMessage(msg, red, " · Send message to resume", width)
 		}
 	}
 	if m.errorText != "" {
-		left = lipgloss.NewStyle().Foreground(red).Render(m.errorText)
+		left = statusMessage(m.errorText, red, "", width-lipgloss.Width(right))
 	}
-	gap := max(1, width-lipgloss.Width(left)-lipgloss.Width(right))
-	return " " + left + strings.Repeat(" ", max(1, gap-1)) + right
+	return composeStatusRow(left, right, width)
+}
+
+// composeStatusRow lays the status text and the corner hint on one row exactly
+// width columns wide. A wider row would widen the whole chat column, because
+// JoinHorizontal pads every row of a block to its widest, which pushes the
+// sidebar off screen and wraps the frame.
+func composeStatusRow(left, right string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	const leading = 1 // the row is indented one column, like the panels above it
+	// A terminal can be narrower than the hint itself. Drop the hint rather than
+	// keep it at the cost of the status, which is the part carrying information;
+	// ctrl-q works whether or not the row has room to say so.
+	if lipgloss.Width(right) > 0 && width < lipgloss.Width(right)+leading+2 {
+		right = ""
+	}
+	separator := 0
+	if lipgloss.Width(right) > 0 {
+		separator = 1
+	}
+	left = truncate(left, max(0, width-leading-lipgloss.Width(right)-separator))
+	padding := max(0, width-leading-lipgloss.Width(left)-lipgloss.Width(right))
+	return " " + left + strings.Repeat(" ", padding) + right
+}
+
+// statusMessage fits a message and its trailing hint on the one status row. A
+// model or backend error can be a wrapped exception several lines long, so it is
+// flattened to a single line and clipped, leaving the hint readable.
+func statusMessage(message string, color lipgloss.Color, hint string, width int) string {
+	styledHint := lipgloss.NewStyle().Foreground(dim).Render(hint)
+	room := max(1, width-2-lipgloss.Width(styledHint))
+	flat := truncate(flattenStatus(message), room)
+	return lipgloss.NewStyle().Foreground(color).Render(flat) + styledHint
+}
+
+// flattenStatus turns a multi-line message into one line, collapsing the runs of
+// whitespace that joining its lines leaves behind.
+func flattenStatus(message string) string {
+	message = strings.NewReplacer("\r\n", " ", "\r", " ", "\n", " ", "\t", " ").Replace(message)
+	return strings.Join(strings.Fields(message), " ")
 }
 
 func (m Model) sweepView() string {
