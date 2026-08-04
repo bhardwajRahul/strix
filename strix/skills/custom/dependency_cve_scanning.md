@@ -39,9 +39,11 @@ trivy version --format json 2>/dev/null | tee "$ART/trivy-version.json"
 # sandbox with egress gets the freshest CVEs; if the update fails, fall back to the
 # cached DB instead of failing the scan. --offline-scan keeps per-package advisory
 # lookups offline.
-trivy fs --scanners vuln --timeout 30m --offline-scan \
+# --list-all-pkgs includes the package graph (Relationship + DependsOn) needed
+# to attribute transitive CVEs to the direct dependency that introduces them.
+trivy fs --scanners vuln --timeout 30m --offline-scan --list-all-pkgs \
   --format json --output "$ART/trivy-sca.json" . \
-  || trivy fs --scanners vuln --timeout 30m --offline-scan --skip-db-update \
+  || trivy fs --scanners vuln --timeout 30m --offline-scan --skip-db-update --list-all-pkgs \
        --format json --output "$ART/trivy-sca.json" . \
   || true
 ```
@@ -77,6 +79,36 @@ For each entry under `.Results[].Vulnerabilities[]` in `trivy-sca.json`, collect
 
 Deduplicate by `(CVE, PkgName, InstalledVersion)`. File one
 `create_dependency_report` per CVE — do not batch multiple CVEs into one report.
+
+### Attribute transitive CVEs to the direct dependency
+
+With `--list-all-pkgs`, each `.Results[].Packages[]` entry carries `ID`
+(`name@version`), `Relationship` (`direct` / `indirect`) and `DependsOn` (the
+`ID`s it resolves to). For every vulnerable package that is **indirect**, walk
+the `DependsOn` graph backwards to find the `direct` package(s) whose closure
+contains it, then pass to `create_dependency_report`:
+
+- `introduced_by` — the direct dependency as `name@version` (e.g.
+  `express@4.18.1`). If several direct dependencies pull it in, pick the
+  primary one and name the rest in `technical_analysis`.
+- `dependency_path` — the shortest resolution chain from that direct
+  dependency to the vulnerable package, joined with ` > ` (e.g.
+  `express@4.18.1 > body-parser@1.20.0 > qs@6.10.2`).
+- Omit both when the vulnerable package is itself a direct dependency.
+
+If the ecosystem's lockfile gives trivy no graph (`DependsOn` absent), derive
+the chain from the package manager instead (`npm ls <pkg>`, `pnpm why <pkg>`,
+`yarn why <pkg>`, `pipdeptree --reverse -p <pkg>`, `go mod graph`,
+`mvn dependency:tree`, ...) — and if that also fails, leave the fields out
+rather than guessing.
+
+For transitive findings, `remediation_steps` must be actionable at the
+**direct-dependency level**: upgrading the vulnerable package directly is
+usually impossible from the app's own manifest. Say which direct dependency to
+bump (a version whose closure resolves the fixed version), or how to force the
+resolution (npm `overrides` / yarn `resolutions` / pnpm `pnpm.overrides` /
+Maven `dependencyManagement` / Gradle resolution strategy / `go mod edit`),
+not just "upgrade <vulnerable pkg> to <fixed>".
 
 ### Reachability is a confidence modifier, not a gate
 

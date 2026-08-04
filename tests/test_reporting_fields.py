@@ -164,6 +164,69 @@ async def test_dependency_report_sets_class_and_metadata(report_state: ReportSta
     }
 
 
+async def test_dependency_report_records_transitive_chain(report_state: ReportState) -> None:
+    result = await _do_create_dependency(
+        title="CVE-2022-24999 in qs 6.10.2",
+        description="Prototype pollution in qs parsing.",
+        target="repo/package.json",
+        cve="CVE-2022-24999",
+        package_name="qs",
+        installed_version="6.10.2",
+        impact="Denial of service via crafted query strings.",
+        remediation_steps="Upgrade express to 4.18.2, which resolves qs 6.11.0.",
+        assumptions="qs parses all incoming query strings by default.",
+        package_ecosystem="npm",
+        fixed_version="6.10.3",
+        cwe="CWE-1321",
+        advisory_cvss=7.5,
+        technical_analysis=None,
+        fix_effort="trivial",
+        introduced_by="express@4.18.1",
+        dependency_path="express@4.18.1 > body-parser@1.20.0 > qs@6.10.2",
+    )
+    assert result["success"] is True
+    report = report_state.vulnerability_reports[0]
+    assert report["dependency_metadata"]["introduced_by"] == "express@4.18.1"
+    assert (
+        report["dependency_metadata"]["dependency_path"]
+        == "express@4.18.1 > body-parser@1.20.0 > qs@6.10.2"
+    )
+    assert (
+        "**Transitive dependency:** introduced by the direct dependency `express@4.18.1`."
+        in report["evidence"]
+    )
+    assert (
+        "**Dependency chain:** `express@4.18.1 > body-parser@1.20.0 > qs@6.10.2`"
+        in report["evidence"]
+    )
+
+
+async def test_dependency_report_omits_blank_chain_fields(report_state: ReportState) -> None:
+    result = await _do_create_dependency(
+        title="CVE-2024-0001 in sample 1.0.0",
+        description="Published advisory affects the pinned version.",
+        target="repo/package.json",
+        cve="CVE-2024-0001",
+        package_name="sample",
+        installed_version="1.0.0",
+        impact="Impact.",
+        remediation_steps="Upgrade.",
+        assumptions="Assumptions.",
+        package_ecosystem="npm",
+        fixed_version=None,
+        cwe=None,
+        advisory_cvss=5.0,
+        technical_analysis=None,
+        fix_effort="trivial",
+        introduced_by="  ",
+        dependency_path=None,
+    )
+    assert result["success"] is True
+    report = report_state.vulnerability_reports[0]
+    assert "introduced_by" not in report["dependency_metadata"]
+    assert "dependency_path" not in report["dependency_metadata"]
+
+
 async def test_dependency_report_with_zero_cvss_remains_low_severity(
     report_state: ReportState,
 ) -> None:

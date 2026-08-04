@@ -298,6 +298,8 @@ func vulnerabilityBody(v map[string]any) string {
 		field("Ecosystem", render.StringValue(dep["package_ecosystem"]))
 		field("Installed Version", render.StringValue(dep["installed_version"]))
 		field("Fixed Version", render.StringValue(dep["fixed_version"]))
+		field("Introduced By", render.StringValue(dep["introduced_by"]))
+		field("Dependency Chain", render.StringValue(dep["dependency_path"]))
 	}
 	field("Endpoint", render.StringValue(v["endpoint"]))
 	field("Method", render.StringValue(v["method"]))
