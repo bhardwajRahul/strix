@@ -496,8 +496,7 @@ func (m Model) setupHintsView(width int) string {
 	key := lipgloss.NewStyle().Foreground(white).Render
 	label := render.Dim().Render
 	hint := func(k, text string) string { return key(k) + label(" "+text) }
-	left := hint("enter", "launch scan") + label("   ") + hint("shift+enter", "newline") +
-		label("   ") + hint("ctrl+c", "quit")
+	left := hint("enter", "launch scan") + label("   ") + hint("ctrl+c", "quit")
 	if lipgloss.Width(left) > inner {
 		left = hint("enter", "launch scan")
 	}
