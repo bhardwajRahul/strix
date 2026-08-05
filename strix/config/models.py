@@ -6,7 +6,7 @@ import contextlib
 import inspect
 import os
 import time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from agents import (
     set_default_openai_api,
@@ -24,12 +24,18 @@ from agents.retry import (
     RetryPolicyContext,
     retry_policies,
 )
-from openai.types.responses import Response, ResponseCompletedEvent
+from openai.types.responses import (
+    Response,
+    ResponseCompletedEvent,
+    ResponseOutputItemAddedEvent,
+    ResponseOutputItemDoneEvent,
+)
 from openai.types.responses.response_usage import ResponseUsage
 from openai.types.shared import Reasoning
 
 from strix.config import codex
 from strix.config.loader import load_settings
+from strix.config.tool_call_ids import TurnCallIdRewriter, dedupe_input
 
 
 if TYPE_CHECKING:
@@ -229,6 +235,105 @@ class _NonStreamingModel(Model):
         yield _completed_stream_event(response, getattr(self._inner, "model", None))
 
 
+class _UniqueToolCallIdModel(Model):
+    """Keep tool-call ids unique so a recycled id can't invalidate the history.
+
+    Providers that number tool calls per turn (``exec_command:0``, ...) restart
+    the counter each turn, so the same id eventually appears twice in one
+    conversation and strict providers reject every subsequent request. Ids that
+    collide with the history are rewritten before the turn is recorded, and
+    already-corrupted histories are repaired on the way out.
+    """
+
+    def __init__(self, inner: Model) -> None:
+        self._inner = inner
+
+    async def close(self) -> None:
+        await self._inner.close()
+
+    def get_retry_advice(self, request: ModelRetryAdviceRequest) -> ModelRetryAdvice | None:
+        return self._inner.get_retry_advice(request)
+
+    async def get_response(
+        self,
+        system_instructions: str | None,
+        input: str | list[TResponseInputItem],  # noqa: A002
+        model_settings: ModelSettings,
+        tools: list[Tool],
+        output_schema: AgentOutputSchemaBase | None,
+        handoffs: list[Handoff],
+        tracing: ModelTracing,
+        *,
+        previous_response_id: str | None,
+        conversation_id: str | None,
+        prompt: ResponsePromptParam | None,
+    ) -> ModelResponse:
+        sanitized = dedupe_input(input)
+        rewriter = TurnCallIdRewriter(sanitized)
+        response = await self._inner.get_response(
+            system_instructions,
+            cast("str | list[TResponseInputItem]", sanitized),
+            model_settings,
+            tools,
+            output_schema,
+            handoffs,
+            tracing,
+            previous_response_id=previous_response_id,
+            conversation_id=conversation_id,
+            prompt=prompt,
+        )
+        response.output = rewriter.rewrite_items(list(response.output))
+        return response
+
+    async def stream_response(
+        self,
+        system_instructions: str | None,
+        input: str | list[TResponseInputItem],  # noqa: A002
+        model_settings: ModelSettings,
+        tools: list[Tool],
+        output_schema: AgentOutputSchemaBase | None,
+        handoffs: list[Handoff],
+        tracing: ModelTracing,
+        *,
+        previous_response_id: str | None,
+        conversation_id: str | None,
+        prompt: ResponsePromptParam | None,
+    ) -> AsyncIterator[TResponseStreamEvent]:
+        sanitized = dedupe_input(input)
+        rewriter = TurnCallIdRewriter(sanitized)
+        stream = self._inner.stream_response(
+            system_instructions,
+            cast("str | list[TResponseInputItem]", sanitized),
+            model_settings,
+            tools,
+            output_schema,
+            handoffs,
+            tracing,
+            previous_response_id=previous_response_id,
+            conversation_id=conversation_id,
+            prompt=prompt,
+        )
+        async for event in stream:
+            yield _rewrite_event_call_ids(event, rewriter)
+
+
+def _rewrite_event_call_ids(
+    event: TResponseStreamEvent, rewriter: TurnCallIdRewriter
+) -> TResponseStreamEvent:
+    if isinstance(event, ResponseOutputItemAddedEvent | ResponseOutputItemDoneEvent):
+        rewritten = rewriter.rewrite_item(event.item)
+        if rewritten is not event.item:
+            return event.model_copy(update={"item": rewritten})
+        return event
+    if isinstance(event, ResponseCompletedEvent):
+        output = rewriter.rewrite_items(list(event.response.output))
+        if output != list(event.response.output):
+            return event.model_copy(
+                update={"response": event.response.model_copy(update={"output": output})}
+            )
+    return event
+
+
 def _completed_stream_event(
     model_response: ModelResponse, model_name: object | None
 ) -> TResponseStreamEvent:
@@ -305,8 +410,8 @@ class StrixProvider(MultiProvider):
             )
         model = super().get_model(model_name)
         if llm.disable_streaming:
-            return _NonStreamingModel(model)
-        return model
+            model = _NonStreamingModel(model)
+        return _UniqueToolCallIdModel(model)
 
 
 DEFAULT_MODEL_RETRY = ModelRetrySettings(

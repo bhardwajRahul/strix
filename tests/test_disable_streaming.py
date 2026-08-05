@@ -31,7 +31,7 @@ from openai.types.responses import (
 
 from strix.config import codex, loader
 from strix.config.loader import load_settings
-from strix.config.models import StrixProvider, _NonStreamingModel
+from strix.config.models import StrixProvider, _NonStreamingModel, _UniqueToolCallIdModel
 
 
 if TYPE_CHECKING:
@@ -299,10 +299,11 @@ def test_get_model_wraps_when_disabled(
     load_settings()
 
     model = StrixProvider().get_model("openai/gpt-4o-mini")
-    assert isinstance(model, _NonStreamingModel)
+    assert isinstance(model, _UniqueToolCallIdModel)
+    assert isinstance(model._inner, _NonStreamingModel)
 
 
-def test_get_model_unwrapped_by_default(
+def test_get_model_keeps_streaming_by_default(
     monkeypatch: pytest.MonkeyPatch, _reset_settings: None
 ) -> None:
     inner = _DummyModel()
@@ -310,7 +311,8 @@ def test_get_model_unwrapped_by_default(
     load_settings()
 
     model = StrixProvider().get_model("openai/gpt-4o-mini")
-    assert model is inner
+    assert isinstance(model, _UniqueToolCallIdModel)
+    assert model._inner is inner
 
 
 def test_get_model_does_not_wrap_subscription_model(
