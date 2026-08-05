@@ -57,6 +57,11 @@ class LlmSettings(BaseSettings):
         alias="LLM_DISABLE_STREAMING",
     )
     timeout: int = Field(default=300, alias="LLM_TIMEOUT")
+    max_tool_calls_per_turn: int = Field(
+        default=32,
+        ge=0,
+        alias="LLM_MAX_TOOL_CALLS_PER_TURN",
+    )
 
 
 class DedupeSettings(BaseSettings):

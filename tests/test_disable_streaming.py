@@ -31,7 +31,7 @@ from openai.types.responses import (
 
 from strix.config import codex, loader
 from strix.config.loader import load_settings
-from strix.config.models import StrixProvider, _NonStreamingModel, _UniqueToolCallIdModel
+from strix.config.models import StrixProvider, _NonStreamingModel, _TurnGuardModel
 
 
 if TYPE_CHECKING:
@@ -299,7 +299,7 @@ def test_get_model_wraps_when_disabled(
     load_settings()
 
     model = StrixProvider().get_model("openai/gpt-4o-mini")
-    assert isinstance(model, _UniqueToolCallIdModel)
+    assert isinstance(model, _TurnGuardModel)
     assert isinstance(model._inner, _NonStreamingModel)
 
 
@@ -311,18 +311,20 @@ def test_get_model_keeps_streaming_by_default(
     load_settings()
 
     model = StrixProvider().get_model("openai/gpt-4o-mini")
-    assert isinstance(model, _UniqueToolCallIdModel)
+    assert isinstance(model, _TurnGuardModel)
     assert model._inner is inner
 
 
-def test_get_model_does_not_wrap_subscription_model(
+def test_get_model_guards_subscription_model_but_keeps_it_streaming(
     monkeypatch: pytest.MonkeyPatch, _reset_settings: None
 ) -> None:
-    # Subscription (ChatGPT) models are always streamed and must not be wrapped.
+    # Subscription (ChatGPT) models are always streamed, so LLM_DISABLE_STREAMING
+    # must not apply — but a runaway response needs capping there too.
     monkeypatch.setattr(codex, "subscription_model", lambda *_: "gpt-5.5")
     monkeypatch.setattr(codex, "get_subscription_client", lambda: AsyncOpenAI(api_key="x"))
     monkeypatch.setenv("LLM_DISABLE_STREAMING", "true")
     load_settings()
 
     model = StrixProvider().get_model("gpt-5.5")
-    assert not isinstance(model, _NonStreamingModel)
+    assert isinstance(model, _TurnGuardModel)
+    assert not isinstance(model._inner, _NonStreamingModel)

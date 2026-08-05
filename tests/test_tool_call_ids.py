@@ -23,7 +23,7 @@ from agents.run import RunConfig
 from openai import AsyncOpenAI
 from openai.types.responses import ResponseFunctionToolCall
 
-from strix.config.models import _NonStreamingModel, _UniqueToolCallIdModel
+from strix.config.models import _NonStreamingModel, _TurnGuardModel
 from strix.config.tool_call_ids import TurnCallIdRewriter, dedupe_history_call_ids
 
 
@@ -153,7 +153,7 @@ async def _run_agent(base_url: str, *, wrap: bool) -> Any:
     class _Provider(ModelProvider):
         def get_model(self, model_name: str | None) -> Model:  # noqa: ARG002
             model = _model(base_url)
-            return _UniqueToolCallIdModel(model) if wrap else model
+            return _TurnGuardModel(model) if wrap else model
 
     agent = Agent(name="t", instructions="use the tool", tools=[do_thing], model="gw-model")
     result = Runner.run_streamed(
