@@ -238,6 +238,7 @@ ignore = [
 "tests/test_disable_streaming.py" = ["N802"]
 "tests/test_tool_call_ids.py" = ["N802"]
 "tests/test_tool_call_limits.py" = ["N802", "SLF001"]
+"tests/test_stream_idle_timeout.py" = ["N802", "SLF001"]
 "tests/test_unknown_tool_recovery.py" = ["N802"]
 "tests/test_report_pdf.py" = ["S105", "S106"]
 # Stdlib HTTP handler overrides (do_GET/do_POST) and lazy imports that avoid a
