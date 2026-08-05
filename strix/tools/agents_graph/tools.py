@@ -14,6 +14,7 @@ from agents import RunContextWrapper, function_tool
 
 from strix.core.agents import Status, coordinator_from_context
 from strix.core.execution import notify_parent_on_terminal
+from strix.core.hooks import LLM_TURN_KEY
 from strix.skills import validate_requested_skills
 
 
@@ -224,6 +225,7 @@ _WAIT_DEFAULT_TIMEOUT_S = 300
 # ``timeout_seconds`` the model asks for. One second of headroom lets the
 # tool's own timeout fire first and return a clean result.
 _WAIT_HARD_CEILING_S = _WAIT_DEFAULT_TIMEOUT_S + 1
+_WAITED_TURN_KEY = "waited_llm_turn"
 
 
 @function_tool(timeout=_WAIT_HARD_CEILING_S)
@@ -238,6 +240,11 @@ async def wait_for_agents(  # noqa: PLR0911
     responds — typically after spawning subagents and you want their
     completion reports. You resume the instant any message arrives, so
     size ``timeout_seconds`` to the work you're awaiting.
+
+    **Issue exactly one wait, then stop and react to what it returns.**
+    This call blocks and resumes on its own; it is not a poll you repeat.
+    Do not write out a wait/check loop ahead of time — a second wait in
+    the same turn returns immediately without waiting.
 
     **This tool is only for waiting on other agents.** Two things it is
     NOT for:
@@ -289,6 +296,24 @@ async def wait_for_agents(  # noqa: PLR0911
             ensure_ascii=False,
             default=str,
         )
+
+    turn = inner.get(LLM_TURN_KEY)
+    if turn is not None and inner.get(_WAITED_TURN_KEY) == turn:
+        return json.dumps(
+            {
+                "success": True,
+                "wait_outcome": "already_waited",
+                "reason": reason,
+                "note": (
+                    "You already waited in this turn. A single wait_for_agents blocks and "
+                    "resumes on its own, so queueing more waits only strands you — issue one "
+                    "wait, then react to what it returns."
+                ),
+            },
+            ensure_ascii=False,
+            default=str,
+        )
+    inner[_WAITED_TURN_KEY] = turn
 
     async with coordinator._lock:
         stopped = coordinator.statuses.get(me) == "stopped"

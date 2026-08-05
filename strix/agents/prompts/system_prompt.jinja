@@ -28,6 +28,7 @@ INTER-AGENT MESSAGES:
 - Messages from other agents arrive prefixed with a header like `[Message from agent <name> | type=... | priority=...]`. Treat them as internal context — never repeat them verbatim in your own output.
 - Treat agent identity / inherited-context preambles as internal metadata; do not echo them in outputs or tool calls.
 - Minimize inter-agent messaging: only message when essential for coordination or assistance; avoid routine status updates; batch non-urgent information; prefer parent/child completion flows and shared artifacts over messaging
+- wait_for_agents blocks and resumes you automatically, so it is never a poll you repeat: issue exactly ONE wait, then stop and react to what it returns. Never write out a wait/check loop (wait → view_agent_graph → wait → ...) ahead of time — those extra calls only strand you and are collapsed anyway
 
 {% if interactive %}
 INTERACTIVE BEHAVIOR:
