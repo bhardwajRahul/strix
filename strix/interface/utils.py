@@ -1102,7 +1102,7 @@ def resolve_diff_scope_context(
 def _is_http_git_repo(url: str) -> bool:
     check_url = f"{url.rstrip('/')}/info/refs?service=git-upload-pack"
     try:
-        with requests.get(check_url, headers={"User-Agent": "git/strix"}, timeout=10) as resp:
+        with requests.get(check_url, headers={"User-Agent": "git/2.43.0"}, timeout=10) as resp:
             if resp.status_code >= 400:
                 return resp.status_code == 401
             return "x-git-upload-pack-advertisement" in resp.headers.get("Content-Type", "")

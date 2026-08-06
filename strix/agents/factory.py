@@ -559,7 +559,7 @@ def registered_agent_tools() -> tuple[Tool, ...]:
 
 def build_strix_agent(
     *,
-    name: str = "strix",
+    name: str = "agent",
     skills: list[str] | None = None,
     is_root: bool,
     scan_mode: str = "deep",

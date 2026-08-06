@@ -28,7 +28,7 @@ Run from the repo root and store output in the shared artifact directory used by
 the source-aware pass:
 
 ```bash
-ART=/workspace/.strix-source-aware
+ART=/workspace/.source-aware
 mkdir -p "$ART"
 
 # Record the vuln DB age so a stale DB is a visible signal, not a silent clean scan.

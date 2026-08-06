@@ -431,7 +431,7 @@ _INTERNAL_TURN_PREFIXES = (
     "== Inherited context from parent",
     # strix.core.execution: the no-tool-call recovery nudge, both modes.
     "Your previous message ended a turn without a tool call.",
-    "Your previous response ended the autonomous Strix run without a lifecycle tool call.",
+    "Your previous response ended the autonomous run without a lifecycle tool call.",
     # strix.core.hooks: budget warnings, the only notices injected unwrapped.
     *(
         f"[{label}] {subject}"
