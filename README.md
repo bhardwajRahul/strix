@@ -337,6 +337,7 @@ Strix builds on the incredible work of open-source projects like [LiteLLM](https
 
 
 > [!WARNING]
-> Only test apps you own or have permission to test. You are responsible for using Strix ethically and legally.
+> **Authorized use only.** Strix actively tests the targets you point it at, so only run it against systems you own or have **explicit, written permission** to test, and stay within the agreed scope. Unauthorized testing is illegal in most jurisdictions.
+> You alone are responsible for obtaining authorization and complying with the law. Strix is provided "as is" with no warranty or liability for misuse.
 
 </div>
