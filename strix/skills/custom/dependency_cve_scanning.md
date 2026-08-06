@@ -168,9 +168,12 @@ fi
 Cheap-first budgeting: the import check is one search per package — always do
 it. Do the per-CVE symbol match for every CVE whose advisory names affected
 symbols (they can be batched into one multi-pattern search per package);
-prioritize `critical`/`high`/KEV when the budget is tight and leave the rest
-at `imported`. Never let this analysis stall reporting — `unknown` with a
-reason beats an unverified claim.
+prioritize `critical`/`high`/KEV when the budget is tight; a CVE whose symbol
+search was skipped may still be reported as `imported` (the import check is
+real evidence), but its `reachability_evidence` must state that the
+affected-symbol check was not performed, so a skipped search is never
+mistaken for a completed one with no hits. Never let this analysis stall
+reporting — `unknown` with a reason beats an unverified claim.
 
 Anti-overclaim rules:
 
