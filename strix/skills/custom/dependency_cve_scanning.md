@@ -149,19 +149,27 @@ fi
    whether application code imports it directly; if not, it is reachable only
    through the direct dependency — check whether the direct dep's usage can
    hit it (if unclear, use `imported` when the direct dep is used at all).
-2. **Symbol match.** Read the advisory (GHSA/NVD/OSV `affected[].ecosystem_specific.imports` or the
-   advisory text) for the affected functions/classes/APIs. Search application
-   code for those symbols (`ast-grep` pattern or `rg -n`). Hits ⇒
+2. **Symbol match — per CVE, not per package.** Read each CVE's own advisory
+   (GHSA/NVD/OSV `affected[].ecosystem_specific.imports` or the advisory
+   text) for the affected functions/classes/APIs. Search application code for
+   those symbols (`ast-grep` pattern or `rg -n`). Hits ⇒
    `vulnerable_symbol_used`, with repo-relative `file:line` of each hit (up
    to a handful) in `reachability_evidence`. Imported but no affected-symbol
    usage found (or the advisory names no symbols) ⇒ `imported`.
+   Different CVEs on the same package usually affect **different** symbols
+   (one hits a parser, another a header check) — never copy one CVE's
+   verdict/evidence onto its siblings; run the symbol search against each
+   CVE's own affected-symbol list. The import check (step 1) is the only
+   part shared across a package's CVEs.
 3. If the analysis was not performed or is inconclusive (obfuscated code,
    dynamic loading, unparsable sources) ⇒ `unknown` and say why in
    `assumptions`.
 
 Cheap-first budgeting: the import check is one search per package — always do
-it. Do the symbol match at least for every `critical`/`high`/KEV CVE; batch
-the searches. Never let this analysis stall reporting — `unknown` with a
+it. Do the per-CVE symbol match for every CVE whose advisory names affected
+symbols (they can be batched into one multi-pattern search per package);
+prioritize `critical`/`high`/KEV when the budget is tight and leave the rest
+at `imported`. Never let this analysis stall reporting — `unknown` with a
 reason beats an unverified claim.
 
 Anti-overclaim rules:
