@@ -70,7 +70,7 @@ jobs:
             TUI_NAME="strix-tui"
             dist/strix --version
           fi
-          uv run pyi-archive_viewer -l "$PYI_BINARY" | grep "strix/bin/$TUI_NAME" >/dev/null
+          uv run pyi-archive_viewer -l "$PYI_BINARY" | grep -E "strix[/\\]bin[/\\]$TUI_NAME" >/dev/null
 
           if [[ "${{ matrix.target }}" == "linux-arm64" ]]; then
             file dist/strix
