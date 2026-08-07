@@ -164,6 +164,15 @@ func wrapBlock(value string, width int) string {
 	return strings.Join(out, "\n")
 }
 
+// scrollbarThumb brightens the bar being dragged so the grab reads as taking
+// hold of it.
+func (m Model) scrollbarThumb(target scrollbarTarget) lipgloss.Color {
+	if m.draggingScrollbar == target {
+		return thumbActive
+	}
+	return thumbResting
+}
+
 func verticalScrollbar(height, total, visible, offset int, thumb lipgloss.Color) string {
 	if height <= 0 || total <= visible {
 		return ""
@@ -424,7 +433,7 @@ func (m Model) renderChatPane(width, height int, border lipgloss.Color) string {
 		m.viewport.TotalLineCount(),
 		m.viewport.VisibleLineCount(),
 		m.viewport.YOffset,
-		thumbTrace,
+		m.scrollbarThumb(scrollbarTrace),
 	)
 	out := lipgloss.NewStyle().Width(width).Height(height).
 		Border(lipgloss.RoundedBorder()).BorderForeground(border).Render(trace)
@@ -489,7 +498,7 @@ func (m Model) sidebarView(width, height int) string {
 		len(agentEntries),
 		agentRows,
 		m.agentOffset,
-		thumbAgents,
+		m.scrollbarThumb(scrollbarAgents),
 	)
 	parts := []string{
 		lipgloss.NewStyle().Width(width-2).Height(m.viewerHeight()-2).Border(lipgloss.RoundedBorder()).BorderForeground(dark).Padding(0, 1).Render(m.viewerView(width - 4)),
@@ -503,13 +512,13 @@ func (m Model) sidebarView(width, height int) string {
 		vulnRows := max(1, vulnHeight-2)
 		totalRows, offsetRows := m.vulnerabilityScrollRows()
 		findings := withVerticalScrollbar(
-			m.vulnerabilitiesView(max(1, width-5), vulnRows),
+			m.vulnerabilitiesView(m.vulnerabilityListWidth(), vulnRows),
 			width-4,
 			vulnRows,
 			totalRows,
 			vulnRows,
 			offsetRows,
-			thumbFindings,
+			m.scrollbarThumb(scrollbarFindings),
 		)
 		parts = append(parts, lipgloss.NewStyle().Width(width-2).Height(vulnRows).Border(lipgloss.RoundedBorder()).BorderForeground(vulnBorder).Padding(0, 1).Render(findings))
 	}
@@ -524,12 +533,7 @@ func (m Model) sidebarHeights() (statsHeight, vulnHeight, agentHeight int) {
 	statsRows := lipgloss.Height(lipgloss.NewStyle().Width(m.viewerContentWidth()).Render(m.statsView()))
 	statsHeight = min(15, statsRows+2)
 	if len(m.snapshot.Vulnerabilities) > 0 {
-		rows := 0
-		width := m.vulnerabilityListWidth()
-		for i := range m.snapshot.Vulnerabilities {
-			rows += len(m.vulnerabilityTitleLines(i, width))
-		}
-		vulnHeight = min(12, rows+2)
+		vulnHeight = min(12, len(m.vulnerabilityRows(m.vulnerabilityListWidth()))+2)
 	}
 	agentHeight = max(3, m.height-m.viewerHeight()-statsHeight-vulnHeight)
 	return
