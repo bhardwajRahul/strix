@@ -26,6 +26,7 @@ from strix.tools.agents_graph.tools import (
     view_agent_graph,
     wait_for_agents,
 )
+from strix.tools.coverage.tools import list_coverage, record_coverage, update_coverage
 from strix.tools.finish.tool import finish_scan
 from strix.tools.load_skill.tool import load_skill
 from strix.tools.notes.tools import (
@@ -52,6 +53,11 @@ from strix.tools.reporting.tool import (
 )
 from strix.tools.respond.tool import respond_to_user
 from strix.tools.thinking.tool import think
+from strix.tools.threat_model.tools import (
+    amend_threat_model,
+    get_threat_model,
+    save_threat_model,
+)
 from strix.tools.todo.tools import (
     create_todo,
     delete_todo,
@@ -528,6 +534,12 @@ _BASE_TOOLS: tuple[Tool, ...] = (
     get_note,
     update_note,
     delete_note,
+    record_coverage,
+    update_coverage,
+    list_coverage,
+    get_threat_model,
+    save_threat_model,
+    amend_threat_model,
     web_search,
     create_vulnerability_report,
     create_dependency_report,
@@ -596,6 +608,7 @@ def build_strix_agent(
     is_root: bool,
     scan_mode: str = "deep",
     is_whitebox: bool = False,
+    is_diff_scoped: bool = False,
     interactive: bool = False,
     chat_completions_tools: bool = False,
     strict_tool_schemas: bool = True,
@@ -623,6 +636,7 @@ def build_strix_agent(
             scan_mode=scan_mode,
             is_whitebox=is_whitebox,
             is_root=is_root,
+            is_diff_scoped=is_diff_scoped,
             interactive=interactive,
             system_prompt_context=system_prompt_context,
         )
@@ -680,6 +694,7 @@ def make_child_factory(
     *,
     scan_mode: str = "deep",
     is_whitebox: bool = False,
+    is_diff_scoped: bool = False,
     interactive: bool = False,
     chat_completions_tools: bool = False,
     strict_tool_schemas: bool = True,
@@ -699,6 +714,7 @@ def make_child_factory(
             is_root=False,
             scan_mode=scan_mode,
             is_whitebox=is_whitebox,
+            is_diff_scoped=is_diff_scoped,
             interactive=interactive,
             chat_completions_tools=chat_completions_tools,
             strict_tool_schemas=strict_tool_schemas,
