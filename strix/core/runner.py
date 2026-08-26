@@ -58,7 +58,7 @@ if TYPE_CHECKING:
     from agents.result import RunResultBase
 
     from strix.runtime.status import StatusSink
-    from strix.tools.mcp import ConnectedMcpServer
+    from strix.tools.mcp import ConnectedMcpServer, McpConnectionRequest
 
 
 logger = logging.getLogger(__name__)
@@ -89,23 +89,6 @@ def _record_mcp_connections(connections: list[ConnectedMcpServer]) -> None:
     if report_state is None:
         return
     report_state.record_mcp_connections([connection.name for connection in connections])
-
-
-def _mcp_connection_notes(connections: list[ConnectedMcpServer]) -> str | None:
-    """A block describing the connections the user left notes on, for the agent.
-
-    Only connections with notes are listed, so the note describes the connection
-    once rather than being repeated onto every tool. Returns ``None`` when no
-    connection has notes.
-    """
-    noted = [(c.name, c.notes) for c in connections if c.notes]
-    if not noted:
-        return None
-    lines = "\n".join(f"- `{name}.*` tools: {notes}" for name, notes in noted)
-    return (
-        "The user connected these MCP servers for this run and left notes on how "
-        f"to use each:\n{lines}"
-    )
 
 
 def _merge_root_prompt_context(
@@ -173,6 +156,7 @@ async def run_strix_scan(
     root_instructions_override: str | None = None,
     extra_system_prompt_context: dict[str, Any] | None = None,
     status_sink: StatusSink | None = None,
+    mcp_connection_requests: list[McpConnectionRequest] | None = None,
 ) -> RunResultBase | None:
     """Run or resume one Strix scan against a sandbox.
 
@@ -184,6 +168,11 @@ async def run_strix_scan(
     ``extra_system_prompt_context`` is merged into the root agent's scan
     context before prompt rendering. Child agents keep the standard scan prompt
     and context.
+    ``mcp_connection_requests`` supplies the run's MCP connections from any
+    source: when given, the engine connects those requests; when ``None`` (the
+    command-line default) it reads ``~/.strix/mcp-servers.json`` itself. Either
+    way the engine does the connecting, so the caller passes inert configs plus
+    metadata and never live sessions.
     """
 
     def report(phase: str) -> None:
@@ -346,6 +335,61 @@ async def run_strix_scan(
             coordinator.set_budget_extender(hooks.extend_budget)
 
         scope_context = build_scope_context(scan_config)
+
+        # Attach the run's MCP connections and hold their live sessions in a
+        # per-run registry. The connections are source-agnostic: a caller
+        # (the SaaS/pro product) can supply them as mcp_connection_requests, and
+        # when it does not the command-line path reads them from
+        # ~/.strix/mcp-servers.json here. Either way one shared engine routine
+        # does the connecting and populating. Nothing is registered as an agent
+        # tool: every agent reaches these connections on demand through the
+        # list_mcps / describe_mcp / call_mcp tools, guided by brief static prompt
+        # guidance when any connection exists. Fail-open: a missing config, or a
+        # server that will not connect, must never break a run.
+        from strix.tools.mcp import (
+            McpConnectionRequest,
+            McpRegistry,
+            attach_mcp_requests,
+            load_user_mcp_configs,
+        )
+
+        mcp_registry = McpRegistry()
+        try:
+            if mcp_connection_requests is None:
+                # Command-line default: read the user's file and wrap each config
+                # in a bare request (no provider or transform), so this path is
+                # exactly the old behavior.
+                mcp_requests = [
+                    McpConnectionRequest(config=config) for config in load_user_mcp_configs()
+                ]
+            else:
+                mcp_requests = mcp_connection_requests
+            if mcp_requests:
+                connections = await attach_mcp_requests(mcp_requests, mcp_registry)
+                mcp_servers = [c.server for c in connections]
+                # Recorded even when nothing connected, so a resumed run does not
+                # keep attributing tool calls to servers it no longer has.
+                _record_mcp_connections(connections)
+                if connections:
+                    report(_mcp_startup_summary(connections))
+                    # Name the connected servers in the prompt so every agent
+                    # (root and children, both deriving from scope_context) sees
+                    # what is available at the start; they can still re-list or
+                    # inspect them at run time via list_mcps / describe_mcp. Set
+                    # only when a connection exists, so a run with no MCP leaves
+                    # the prompt context unchanged.
+                    scope_context["mcp_available"] = bool(mcp_registry)
+                    scope_context["mcp_connections"] = [
+                        {
+                            "name": summary.name,
+                            "purpose": summary.purpose,
+                            "tool_count": summary.tool_count,
+                        }
+                        for summary in mcp_registry.summaries()
+                    ]
+        except Exception:
+            logger.exception("Failed to connect user MCP servers; continuing without them")
+
         root_context = _merge_root_prompt_context(scope_context, extra_system_prompt_context)
         root_instructions = _compose_root_instructions_override(
             root_instructions_override,
@@ -356,27 +400,6 @@ async def run_strix_scan(
             interactive=interactive,
             system_prompt_context=root_context,
         )
-
-        # Connect any MCP servers the user listed in ~/.strix/mcp-servers.json and
-        # register their tools before the agent is built. Fail-open: a missing
-        # config, or a server that will not connect, must never break a run.
-        from strix.tools.mcp import connect_mcp_servers, load_user_mcp_configs
-
-        try:
-            user_mcp_configs = load_user_mcp_configs()
-            if user_mcp_configs:
-                connections = await connect_mcp_servers(user_mcp_configs)
-                mcp_servers = [c.server for c in connections]
-                # Recorded even when nothing connected, so a resumed run does not
-                # keep attributing tool calls to servers it no longer has.
-                _record_mcp_connections(connections)
-                if connections:
-                    report(_mcp_startup_summary(connections))
-                    notes_block = _mcp_connection_notes(connections)
-                    if notes_block:
-                        root_task = f"{root_task}\n\n{notes_block}"
-        except Exception:
-            logger.exception("Failed to connect user MCP servers; continuing without them")
 
         root_agent = build_strix_agent(
             name="Root Agent",
@@ -429,6 +452,7 @@ async def run_strix_scan(
             "coordinator": coordinator,
             "sandbox_session": bundle["session"],
             "caido_client": bundle["caido_client"],
+            "mcp_registry": mcp_registry,
             "agent_id": root_id,
             "parent_id": None,
             "interactive": interactive,
