@@ -9,6 +9,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import webbrowser
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -30,6 +32,23 @@ _MAX_WALLET_DETAIL_CHARS = 2_000
 # platform. This version is also old enough to remain installable in npm
 # environments that apply a short package-publication safety window.
 _MPPX_PACKAGE = "mppx@0.8.17"
+# Stripe's own wallet client. It runs the complete challenge flow: it creates a
+# spend request, waits for the person to approve it in the Link app, and retries
+# the payment with the approved credential.
+_LINK_CLI_PACKAGE = "@stripe/link-cli@0.13.1"
+_LINK_CLI_CLIENT_NAME = "Strix CLI"
+_LINK_LOGIN_TIMEOUT_S = 300
+# Poll every 2 seconds while the person approves the spend request in the Link
+# app. 150 attempts give the person 5 minutes.
+_LINK_APPROVAL_POLL_INTERVAL_S = 2
+_LINK_APPROVAL_MAX_ATTEMPTS = 150
+# Bound every wallet subprocess so a stalled npm download or wallet request
+# cannot block the top-up command forever. The poll step gets the full
+# approval window plus this margin.
+_WALLET_STEP_TIMEOUT_S = 300
+_LINK_APPROVAL_TIMEOUT_S = (
+    _LINK_APPROVAL_POLL_INTERVAL_S * _LINK_APPROVAL_MAX_ATTEMPTS + _WALLET_STEP_TIMEOUT_S
+)
 _NPM_REGISTRY = "https://registry.npmjs.org"
 _WALLET_ENV_NAMES = frozenset(
     {
@@ -58,6 +77,8 @@ _WALLET_ENV_NAMES = frozenset(
         "TMPDIR",
         "USERPROFILE",
         "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+        "XDG_STATE_HOME",
         "all_proxy",
         "http_proxy",
         "https_proxy",
@@ -74,7 +95,7 @@ class _WalletClientResult:
     upstream_responses: tuple[WalletUpstreamResponse, ...]
 
 
-def run_topup(  # noqa: PLR0911, PLR0912
+def run_topup(  # noqa: PLR0911, PLR0912, PLR0915
     console: Console,
     args: argparse.Namespace,
     body: dict[str, Any],
@@ -137,24 +158,25 @@ def run_topup(  # noqa: PLR0911, PLR0912
     payment_method = getattr(args, "payment_method", None) or os.environ.get(
         "MPPX_STRIPE_PAYMENT_METHOD"
     )
-    if not payment_method and (
-        not as_json
-        and not os.environ.get("MPPX_ACCOUNT")
-        and not os.environ.get("MPPX_STRIPE_SECRET_KEY")
-    ):
-        console.print(
-            "[dim]Tip: payments need a wallet. Set up a Stripe agent wallet at "
-            "https://link.com/agents, and the user approves each payment in the Link app. "
-            "If the user does not want a wallet, run "
-            "`strix cloud billing subscribe --plan strix_top_up` for a hosted checkout link.[/]"
-        )
+    use_link_wallet = payment_method is None and not _mppx_wallet_configured()
+    if use_link_wallet:
+        setup_error = _prepare_link_wallet(console, npx, as_json=as_json)
+        if setup_error is not None:
+            emit(
+                console,
+                {"error": setup_error, "challenge": challenge},
+                as_json=as_json,
+            )
+            return http.EXIT_PAYMENT
     try:
         wallet_result = _run_wallet_client(
+            console,
             npx,
             args,
             body,
             token=token,
             payment_method=payment_method,
+            use_link_wallet=use_link_wallet,
             capture_output=as_json,
         )
     except KeyboardInterrupt:
@@ -185,19 +207,20 @@ def run_topup(  # noqa: PLR0911, PLR0912
     result = wallet_result.process
     confirmed_receipt = _confirmed_topup_receipt(wallet_result.upstream_responses)
     if confirmed_receipt is not None:
-        if as_json:
-            emit(console, confirmed_receipt, as_json=True)
+        emit(console, confirmed_receipt, as_json=as_json)
         return http.EXIT_OK
 
+    stdout = str(getattr(result, "stdout", "") or "").strip()
+    stderr = str(getattr(result, "stderr", "") or "").strip()
     if not as_json:
         console.print(
             "[yellow]The wallet exited without a confirmed receipt. The payment outcome is "
             "unknown; run `strix cloud billing credits` before retrying.[/]"
         )
+        detail = _wallet_detail(stderr or stdout or "")
+        if detail:
+            console.print(f"[dim]Wallet output: {detail}[/]")
         return http.EXIT_PAYMENT
-
-    stdout = str(getattr(result, "stdout", "") or "").strip()
-    stderr = str(getattr(result, "stderr", "") or "").strip()
     if result.returncode == 0:
         try:
             receipt = json.loads(stdout)
@@ -262,15 +285,17 @@ def run_topup(  # noqa: PLR0911, PLR0912
 
 
 def _run_wallet_client(
+    console: Console,
     npx: str,
     args: argparse.Namespace,
     body: dict[str, Any],
     *,
     token: str | None,
     payment_method: str | None,
+    use_link_wallet: bool,
     capture_output: bool,
 ) -> _WalletClientResult:
-    """Run mppx through the loopback bridge without exposing the API token to it."""
+    """Run the wallet through the loopback bridge without exposing the API token."""
     upstream_url = f"{http.app_url()}/api/v1/billing/topup"
     body_json = json.dumps(body)
     wallet_env = _wallet_environment()
@@ -281,6 +306,7 @@ def _run_wallet_client(
         global_config = wallet_root / "global.npmrc"
         user_config.touch(mode=0o600)
         global_config.touch(mode=0o600)
+        npx_prefix = _npx_prefix(npx, wallet_root)
         with wallet_payment_bridge(
             upstream_url=upstream_url,
             api_token=http.api_token(token),
@@ -289,31 +315,348 @@ def _run_wallet_client(
             timeout=getattr(args, "timeout", None),
             response_observer=upstream_responses.append,
         ) as wallet_url:
-            command = [
-                npx,
-                "--yes",
-                f"--registry={_NPM_REGISTRY}",
-                "--ignore-scripts",
-                f"--userconfig={user_config}",
-                f"--globalconfig={global_config}",
-                f"--cache={wallet_root / 'npm-cache'}",
-                _MPPX_PACKAGE,
-                wallet_url,
-                "--fail",
-                "-J",
-                body_json,
-            ]
-            if payment_method:
-                command += ["-M", f"paymentMethod={payment_method}"]
-            process = subprocess.run(  # noqa: S603
-                command,
-                check=False,
-                capture_output=capture_output,
-                text=True,
-                env=wallet_env,
-                cwd=wallet_root,
-            )
+            if use_link_wallet:
+                process = _run_link_wallet_flow(
+                    console,
+                    npx_prefix,
+                    wallet_url,
+                    body,
+                    body_json,
+                    wallet_env,
+                    wallet_root,
+                    quiet=capture_output,
+                )
+            else:
+                command = [
+                    *npx_prefix,
+                    _MPPX_PACKAGE,
+                    wallet_url,
+                    "--fail",
+                    "-J",
+                    body_json,
+                ]
+                if payment_method:
+                    command += ["-M", f"paymentMethod={payment_method}"]
+                try:
+                    process = subprocess.run(  # noqa: S603
+                        command,
+                        check=False,
+                        capture_output=capture_output,
+                        text=True,
+                        env=wallet_env,
+                        cwd=wallet_root,
+                        timeout=_LINK_APPROVAL_TIMEOUT_S,
+                    )
+                except subprocess.TimeoutExpired as timeout_error:
+                    process = subprocess.CompletedProcess(
+                        args=command,
+                        returncode=1,
+                        stdout=_decoded_stream(timeout_error.stdout),
+                        stderr=(
+                            "The wallet step did not complete within "
+                            f"{_LINK_APPROVAL_TIMEOUT_S} seconds."
+                        ),
+                    )
     return _WalletClientResult(process=process, upstream_responses=tuple(upstream_responses))
+
+
+def _run_link_wallet_flow(
+    console: Console,
+    npx_prefix: list[str],
+    wallet_url: str,
+    body: dict[str, Any],
+    body_json: str,
+    wallet_env: dict[str, str],
+    wallet_root: Path,
+    *,
+    quiet: bool,
+) -> subprocess.CompletedProcess[str]:
+    """Create the spend request, wait for approval in the Link app, then pay."""
+
+    def run_step(
+        arguments: list[str],
+        progress_message: str,
+        timeout: int = _WALLET_STEP_TIMEOUT_S,
+    ) -> subprocess.CompletedProcess[str]:
+        command = [*npx_prefix, _LINK_CLI_PACKAGE, *arguments]
+
+        def run() -> subprocess.CompletedProcess[str]:
+            try:
+                return subprocess.run(  # noqa: S603
+                    command,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    env=wallet_env,
+                    cwd=wallet_root,
+                    timeout=timeout,
+                )
+            except subprocess.TimeoutExpired as timeout_error:
+                return subprocess.CompletedProcess(
+                    args=command,
+                    returncode=1,
+                    stdout=_decoded_stream(timeout_error.stdout),
+                    stderr=f"The wallet step did not complete within {timeout} seconds.",
+                )
+
+        if quiet:
+            return run()
+        with console.status(progress_message):
+            return run()
+
+    created = run_step(
+        [
+            "mpp",
+            "pay",
+            wallet_url,
+            "--method",
+            "POST",
+            "--data",
+            body_json,
+            "--context",
+            _payment_context(body),
+            "--format",
+            "json",
+        ],
+        "Starting the Stripe Link wallet…",
+    )
+    spend_request = _pending_spend_request(created.stdout)
+    if spend_request is None:
+        return created
+    request_id, approval_url = spend_request
+
+    if not quiet:
+        console.print(f"[yellow]Approve the payment in the Link app:[/] {approval_url}")
+        if sys.stdin.isatty() and sys.stdout.isatty() and approval_url.startswith("https://"):
+            with suppress(Exception):
+                webbrowser.open(approval_url)
+    polled = run_step(
+        [
+            "spend-request",
+            "retrieve",
+            request_id,
+            "--interval",
+            str(_LINK_APPROVAL_POLL_INTERVAL_S),
+            "--max-attempts",
+            str(_LINK_APPROVAL_MAX_ATTEMPTS),
+            "--format",
+            "jsonl",
+        ],
+        "Waiting for the approval in the Link app…",
+        timeout=_LINK_APPROVAL_TIMEOUT_S,
+    )
+    if _final_spend_request_status(polled.stdout) != "approved":
+        return polled
+
+    return run_step(
+        [
+            "mpp",
+            "pay",
+            wallet_url,
+            "--spend-request-id",
+            request_id,
+            "--method",
+            "POST",
+            "--data",
+            body_json,
+            "--format",
+            "json",
+        ],
+        "Completing the payment…",
+    )
+
+
+def _decoded_stream(stream: str | bytes | None) -> str:
+    """Return captured subprocess output as text."""
+    if stream is None:
+        return ""
+    if isinstance(stream, bytes):
+        return stream.decode(errors="replace")
+    return stream
+
+
+def _embedded_json_documents(text: str) -> list[Any]:
+    """Extract JSON documents from wallet output that can contain other text."""
+    documents: list[Any] = []
+    decoder = json.JSONDecoder()
+    position = 0
+    while position < len(text):
+        start_candidates = [
+            index for index in (text.find("[", position), text.find("{", position)) if index != -1
+        ]
+        if not start_candidates:
+            break
+        start = min(start_candidates)
+        try:
+            document, end = decoder.raw_decode(text, start)
+        except ValueError:
+            position = start + 1
+            continue
+        documents.append(document)
+        position = end
+    return documents
+
+
+def _spend_request_records(stdout: str) -> list[dict[str, Any]]:
+    """Parse spend-request records from JSON or JSON-lines wallet output."""
+    records: list[dict[str, Any]] = []
+    for candidate in _embedded_json_documents((stdout or "").strip()):
+        items = candidate if isinstance(candidate, list) else [candidate]
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            record = cast("dict[str, Any]", item)
+            data = record.get("data")
+            if isinstance(data, dict):
+                record = cast("dict[str, Any]", data)
+            records.append(record)
+    return records
+
+
+def _pending_spend_request(stdout: str) -> tuple[str, str] | None:
+    """Find a spend request that waits for approval in the Link app."""
+    for record in _spend_request_records(stdout):
+        request_id = record.get("id")
+        approval_url = record.get("approval_url")
+        if (
+            record.get("status") == "pending_approval"
+            and isinstance(request_id, str)
+            and request_id
+            and isinstance(approval_url, str)
+        ):
+            return request_id, approval_url
+    return None
+
+
+def _final_spend_request_status(stdout: str) -> str | None:
+    """Return the last reported status from the approval poll output."""
+    status: str | None = None
+    for record in _spend_request_records(stdout):
+        value = record.get("status")
+        if isinstance(value, str):
+            status = value
+    return status
+
+
+def _npx_prefix(npx: str, wallet_root: Path) -> list[str]:
+    """Install the wallet client from a fixed registry without lifecycle scripts."""
+    return [
+        npx,
+        "--yes",
+        f"--registry={_NPM_REGISTRY}",
+        "--ignore-scripts",
+        f"--userconfig={wallet_root / 'user.npmrc'}",
+        f"--globalconfig={wallet_root / 'global.npmrc'}",
+        f"--cache={_wallet_npm_cache()}",
+    ]
+
+
+def _wallet_npm_cache() -> Path:
+    """Keep one private npm cache so the pinned wallet client installs once."""
+    cache = Path.home() / ".strix" / "wallet-npm-cache"
+    cache.mkdir(mode=0o700, parents=True, exist_ok=True)
+    return cache
+
+
+def _payment_context(body: dict[str, Any]) -> str:
+    """Describe the purchase for the person who approves it in the Link app."""
+    credits_requested = body.get("credits")
+    return (
+        f"Strix scan credits. The Strix command line interface asks to buy "
+        f"{credits_requested} scan credit(s) for the selected Strix workspace on "
+        "app.strix.ai. Strix spends the credits on managed penetration test scans "
+        "that the user starts."
+    )
+
+
+def _mppx_wallet_configured() -> bool:
+    """Report whether the person already configured the mppx wallet client."""
+    return bool(os.environ.get("MPPX_ACCOUNT") or os.environ.get("MPPX_STRIPE_SECRET_KEY"))
+
+
+def _run_link_cli(
+    npx: str,
+    arguments: list[str],
+    *,
+    capture_output: bool,
+    timeout: float | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Run one Stripe Link wallet command in an isolated npm environment."""
+    with tempfile.TemporaryDirectory(prefix="strix-wallet-") as wallet_cwd:
+        wallet_root = Path(wallet_cwd)
+        (wallet_root / "user.npmrc").touch(mode=0o600)
+        (wallet_root / "global.npmrc").touch(mode=0o600)
+        return subprocess.run(  # noqa: S603
+            [*_npx_prefix(npx, wallet_root), _LINK_CLI_PACKAGE, *arguments],
+            check=False,
+            capture_output=capture_output,
+            text=True,
+            env=_wallet_environment(),
+            cwd=wallet_root,
+            timeout=timeout,
+        )
+
+
+def _link_wallet_authenticated(npx: str) -> bool:
+    """Report whether a Link wallet is already connected to this machine."""
+    try:
+        result = _run_link_cli(
+            npx,
+            ["auth", "status", "--format", "json"],
+            capture_output=True,
+            timeout=_LINK_LOGIN_TIMEOUT_S,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    try:
+        payload = json.loads(result.stdout or "null")
+    except (TypeError, ValueError):
+        return False
+    if isinstance(payload, list):
+        payload = payload[0] if payload else None
+    return bool(isinstance(payload, dict) and payload.get("authenticated"))
+
+
+def _prepare_link_wallet(console: Console, npx: str, *, as_json: bool) -> str | None:
+    """Connect a Link wallet when none is present. Return an error message on failure."""
+    if _link_wallet_authenticated(npx):
+        return None
+
+    manual_setup = (
+        "Payment needs a Stripe Link wallet. Run `strix cloud billing topup` in an "
+        "interactive terminal to connect one, or set up the wallet at "
+        "https://link.com/agents. For a browser checkout instead, run "
+        "`strix cloud billing subscribe --plan strix_top_up`."
+    )
+    if as_json or not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return manual_setup
+
+    console.print(
+        "[yellow]No Stripe Link wallet is connected.[/] Strix starts the Link sign-in now. "
+        "Approve the connection in the Link app, then Strix continues the payment. "
+        "The user approves every payment in the Link app."
+    )
+    try:
+        _run_link_cli(
+            npx,
+            [
+                "auth",
+                "login",
+                "--client-name",
+                _LINK_CLI_CLIENT_NAME,
+                "--interval",
+                "3",
+                "--timeout",
+                str(_LINK_LOGIN_TIMEOUT_S),
+            ],
+            capture_output=False,
+            timeout=_LINK_LOGIN_TIMEOUT_S + 30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return manual_setup
+    if _link_wallet_authenticated(npx):
+        return None
+    return manual_setup
 
 
 def _wallet_environment() -> dict[str, str]:
@@ -321,7 +664,7 @@ def _wallet_environment() -> dict[str, str]:
     environment = {
         name: value
         for name, value in os.environ.items()
-        if name in _WALLET_ENV_NAMES or name.startswith("MPPX_")
+        if name in _WALLET_ENV_NAMES or name.startswith(("LINK_", "MPPX_"))
     }
     for name in ("NO_PROXY", "no_proxy"):
         entries = [entry.strip() for entry in environment.get(name, "").split(",") if entry.strip()]
