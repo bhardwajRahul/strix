@@ -62,6 +62,14 @@ import logging  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
+_ROOT_SUBCOMMAND_HELP = """
+Additional commands:
+  strix cloud ...          Use the managed Strix platform
+  strix auth ...           Manage model-subscription sign-in
+  strix view [RUN]         View a completed or running scan
+  strix completions SHELL  Generate zsh, bash, or fish tab completion
+"""
+
 
 def _exception_messages(exc: BaseException) -> tuple[str, ...]:
     messages: list[str] = []
@@ -410,6 +418,13 @@ def main() -> None:
     if sys.platform == "win32":
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
+    if len(sys.argv) == 2 and sys.argv[1] in ("-h", "--help"):
+        try:
+            parse_arguments()
+        except SystemExit as exc:
+            Console().print(_ROOT_SUBCOMMAND_HELP.strip(), markup=False)
+            raise SystemExit(exc.code) from None
+
     # `strix view [<run>]` is a viewer-only subcommand, dispatched before the
     # scan argument parser (which requires a target) and before any scan setup.
     if len(sys.argv) > 1 and sys.argv[1] == "view":
@@ -424,6 +439,19 @@ def main() -> None:
         from strix.interface.auth_cli import run_auth
 
         sys.exit(run_auth(sys.argv[2:]))
+
+    # Generate native shell completion scripts before scan argument parsing.
+    if len(sys.argv) > 1 and sys.argv[1] in ("completion", "completions"):
+        from strix.interface.completions import run_completions
+
+        sys.exit(run_completions(sys.argv[2:]))
+
+    # `strix cloud …` drives the managed platform (app.strix.ai) and exits;
+    # it needs no target, Docker, or scan setup.
+    if len(sys.argv) > 1 and sys.argv[1] == "cloud":
+        from strix.interface.cloud import run_cloud
+
+        sys.exit(run_cloud(sys.argv[2:]))
 
     from strix.llm.warmup import start_import_warmup
 
