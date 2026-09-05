@@ -333,6 +333,11 @@ def display_completion_message(args: argparse.Namespace, results_path: Path) -> 
         "[#60a5fa]docs.strix.ai[/]  [dim]·[/]  "
         "[#60a5fa]discord.gg/strix-ai[/]"
     )
+    if not args.non_interactive:
+        console.print(
+            "[dim]Run a pentest in Strix Cloud[/]  [#60a5fa]app.strix.ai[/]  [dim]·[/]  "
+            "[dim]Enterprise[/]  [#60a5fa]strix.ai/demo[/]"
+        )
     console.print()
     if not args.non_interactive:
         notify_update(console)
