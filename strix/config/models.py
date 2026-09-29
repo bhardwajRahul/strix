@@ -36,6 +36,7 @@ from openai.types.responses import (
 from openai.types.responses.response_usage import ResponseUsage
 from openai.types.shared import Reasoning
 
+from strix.agents.prompt import CACHE_POINT
 from strix.config import codex
 from strix.config.loader import load_settings
 from strix.config.tool_call_ids import TurnCallIdRewriter, dedupe_input
@@ -306,6 +307,9 @@ class _TurnGuardModel(Model):
     ) -> ModelResponse:
         sanitized = dedupe_input(input)
         rewriter = TurnCallIdRewriter(sanitized)
+        system_instructions, sanitized = _split_cached_prefix(
+            system_instructions, sanitized, model_settings
+        )
         response = await self._inner.get_response(
             system_instructions,
             cast("str | list[TResponseInputItem]", sanitized),
@@ -339,6 +343,9 @@ class _TurnGuardModel(Model):
     ) -> AsyncIterator[TResponseStreamEvent]:
         sanitized = dedupe_input(input)
         rewriter = TurnCallIdRewriter(sanitized)
+        system_instructions, sanitized = _split_cached_prefix(
+            system_instructions, sanitized, model_settings
+        )
         limiter = self._limiter()
         stream = self._inner.stream_response(
             system_instructions,
@@ -357,6 +364,27 @@ class _TurnGuardModel(Model):
             if guarded is not None:
                 yield guarded
         self._log_dropped(limiter)
+
+
+def _split_cached_prefix(
+    system_instructions: str | None,
+    model_input: str | list[Any],
+    model_settings: ModelSettings,
+) -> tuple[str | None, str | list[Any]]:
+    """Split the system prompt at each ``CACHE_POINT`` on cache-point routes.
+
+    LiteLLM puts a cache point at the end of each system message, so each part
+    gets its own. Other routes get the prompt with the markers removed.
+    """
+    if not system_instructions or CACHE_POINT not in system_instructions:
+        return system_instructions, model_input
+    extra_args = model_settings.extra_args or {}
+    if "cache_control_injection_points" not in extra_args:
+        return system_instructions.replace(CACHE_POINT, ""), model_input
+    if isinstance(model_input, str):
+        model_input = [{"role": "user", "content": model_input}]
+    parts = [part for part in system_instructions.split(CACHE_POINT) if part.strip()]
+    return None, [*({"role": "system", "content": part} for part in parts), *model_input]
 
 
 async def _aclose(stream: AsyncIterator[TResponseStreamEvent]) -> None:
